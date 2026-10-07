@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 
 #include "encodercheck.h"
+#include "settings.h"
 #include "sizeestimator.h"
 #include "spinner.h"
 #include "systeminfo.h"
@@ -34,7 +35,6 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
-#include <QSettings>
 #include <QSlider>
 #include <QSpinBox>
 #include <QStandardItemModel>
@@ -223,7 +223,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(updater_, &UpdateChecker::updateAvailable, this, &MainWindow::onUpdateAvailable);
     connect(updater_, &UpdateChecker::upToDate, this, [this] {
-        QSettings().setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
+        appSettings()->setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
         if (manualUpdateCheck_)
             updateStatus_->setText("✔ You have the latest version");
         manualUpdateCheck_ = false;
@@ -467,8 +467,9 @@ MainWindow::MainWindow(QWidget *parent)
     log_->setMaximumHeight(110);
 
     autoUpdateCheck_ = new QCheckBox("Check for updates automatically");
-    autoUpdateCheck_->setChecked(QSettings().value("updates/autoCheck", true).toBool());
-    connect(autoUpdateCheck_, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue("updates/autoCheck", on); });
+    autoUpdateCheck_->setChecked(appSettings()->value("updates/autoCheck", true).toBool());
+    connect(autoUpdateCheck_, &QCheckBox::toggled, this,
+            [](bool on) { appSettings()->setValue("updates/autoCheck", on); });
     checkNowBtn_ = new QPushButton("Check now");
     connect(checkNowBtn_, &QPushButton::clicked, this, [this] { checkForUpdates(true); });
     updateStatus_ = new QLabel;
@@ -503,7 +504,7 @@ MainWindow::MainWindow(QWidget *parent)
     fitToContent();
 
     // automatic check: a few seconds after startup, at most once a day
-    const QDateTime lastCheck = QSettings().value("updates/lastCheck").toDateTime();
+    const QDateTime lastCheck = appSettings()->value("updates/lastCheck").toDateTime();
     if (autoUpdateCheck_->isChecked()
         && (!lastCheck.isValid() || lastCheck.secsTo(QDateTime::currentDateTimeUtc()) > 24 * 3600))
         QTimer::singleShot(3000, this, [this] { checkForUpdates(false); });
@@ -1409,7 +1410,7 @@ void MainWindow::checkForUpdates(bool manual)
 
 void MainWindow::onUpdateAvailable(const UpdateInfo &info)
 {
-    QSettings().setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
+    appSettings()->setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
     pendingUpdate_ = info;
     updateText_->setText(QString("<b>Video Compressor %1</b> is available (you have %2).")
                              .arg(info.version.toHtmlEscaped(), QCoreApplication::applicationVersion()));

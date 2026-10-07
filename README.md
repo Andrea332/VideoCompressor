@@ -20,6 +20,10 @@ Previous versions and the changes in each one are on the
 [releases page](https://github.com/Andrea332/VideoCompressor/releases).
 FFmpeg is included in every download: there is nothing else to install.
 
+Every system also has a **portable** version (the files ending in
+`-portable`): extract it and run it from wherever you like, even a USB stick,
+without installing anything.
+
 ### Windows 10/11
 
 There are two versions: `win64` for most PCs (Intel and AMD processors) and
@@ -34,10 +38,13 @@ says "x64-based processor" or "ARM-based processor".
   It adds Video Compressor to the Start menu (and, if you want, to the
   desktop), and you can uninstall it from Windows Settings like any other app.
   The app updates itself from then on (see *Updates* below).
-- **Portable zip** (`VideoCompressor-<version>-win64.zip` or `-win-arm64.zip`): extract it and run
-  `VideoCompressor.exe` inside the extracted folder. Keep the folder as it is,
-  because the program needs the files next to it (Qt libraries and the
-  `ffmpeg` folder).
+- **Portable** (`VideoCompressor-<version>-win64-portable.zip` or
+  `-win-arm64-portable.zip`): extract it and run `VideoCompressor.exe` inside
+  the extracted folder. Keep the folder as it is, because the program needs the
+  files next to it (Qt libraries and the `ffmpeg` folder). It keeps its
+  settings in `VideoCompressor.ini` in the same folder and writes nothing to
+  the registry, so it leaves no trace on the PC (delete that file to keep the
+  settings in the registry instead).
 
 The app is not code-signed, so Windows SmartScreen may show "Windows protected
 your PC" the first time: click **More info** → **Run anyway**.
@@ -45,7 +52,8 @@ your PC" the first time: click **More info** → **Run anyway**.
 ### macOS 13 or later, Apple Silicon (M1 or later)
 
 Open `VideoCompressor-<version>-macos-arm64.dmg` and drag Video Compressor into
-Applications.
+Applications. The portable version, `VideoCompressor-<version>-macos-arm64-portable.zip`,
+is the same app in a zip: extract it and run it from any folder.
 
 The app is not signed by a registered Apple developer, so the first time macOS
 blocks it. Open **System Settings → Privacy & Security**, scroll down and click
@@ -67,7 +75,19 @@ The x86_64 version works on distributions from 2022 on (for example Ubuntu
 22.04, Debian 12, Fedora 36 and later), the ARM64 one on distributions from 2024
 on (Ubuntu 24.04, Debian 13, Fedora 40, Raspberry Pi OS based on Debian 13 and
 later). If it doesn't start because FUSE is missing, run it with
-`--appimage-extract-and-run`.
+`--appimage-extract-and-run`, or use the portable version.
+
+The portable version, `VideoCompressor-<version>-linux-x86_64-portable.tar.gz`
+(or `-linux-aarch64-portable.tar.gz`), is the same app as a folder, which needs
+no FUSE: extract it anywhere and run `VideoCompressor` inside it.
+
+```bash
+tar -xzf VideoCompressor-*-portable.tar.gz
+./VideoCompressor-*-portable/VideoCompressor
+```
+
+It keeps its settings in `VideoCompressor.ini` in that folder instead of in
+`~/.config`.
 
 ## Features
 
@@ -150,7 +170,7 @@ newer version, a notice appears at the top of the window:
 - **Update now** (Windows, installed with the installer): downloads the new
   installer, checks it against the SHA-256 published by GitHub, installs it
   and restarts the app.
-- **Download** (portable zip, macOS, Linux): opens the release page.
+- **Download** (portable versions, macOS, Linux): opens the release page.
 
 Untick **Check for updates automatically** at the bottom of the window to turn
 it off; **Check now** checks right away.

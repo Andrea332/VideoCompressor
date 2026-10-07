@@ -5,6 +5,7 @@
 #include "encodercheck.h"
 #include "mainwindow.h"
 #include "media.h"
+#include "settings.h"
 #include "sizeestimator.h"
 #include "spinner.h"
 #include "updatechecker.h"
@@ -12,6 +13,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
@@ -65,6 +67,7 @@ private slots:
     void showsTheOutcomeClearly();
     void scrollsOnShortScreens();
     void notifiesAboutUpdates();
+    void keepsPortableSettingsNextToTheApp();
     void survivesClosingWhileBusy();
     void rendersWindow();
 
@@ -822,6 +825,37 @@ void TestVideoCompressor::notifiesAboutUpdates()
     QCOMPARE(w.updateBtn_->text(), QString("Download"));
     QTest::mouseClick(w.laterBtn_, Qt::LeftButton);
     QVERIFY(!w.updateBar_->isVisible());
+}
+
+// The portable versions come with VideoCompressor.ini next to the program, and keep their settings in it.
+void TestVideoCompressor::keepsPortableSettingsNextToTheApp()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+#if defined(Q_OS_WIN)
+    const QString appDir = root.path();                                     // VideoCompressor.exe
+#elif defined(Q_OS_MACOS)
+    const QString appDir = root.filePath("VideoCompressor.app/Contents/MacOS");   // next to the app
+#else
+    const QString appDir = root.filePath("usr/bin");                        // top of the extracted folder
+#endif
+    const QString ini = portableSettingsPath(appDir);
+    QCOMPARE(ini, QDir::cleanPath(root.filePath("VideoCompressor.ini")));
+
+    // the file of the packages (comments only) is read and then written like any settings file
+    QVERIFY(QFile::copy(QStringLiteral(SOURCE_DIR "/packaging/portable/VideoCompressor.ini"), ini));
+    QFile::setPermissions(ini, QFile::ReadOwner | QFile::WriteOwner);
+    {
+        QSettings settings(ini, QSettings::IniFormat);
+        QCOMPARE(settings.status(), QSettings::NoError);
+        QVERIFY(settings.allKeys().isEmpty());
+        settings.setValue("updates/autoCheck", false);
+    }
+    QCOMPARE(QSettings(ini, QSettings::IniFormat).value("updates/autoCheck", true).toBool(), false);
+
+    // the tests' own program has no such file: its settings go where main() below puts them
+    QVERIFY(!QFileInfo::exists(portableSettingsPath(QCoreApplication::applicationDirPath())));
+    QCOMPARE(appSettings()->fileName(), QSettings().fileName());
 }
 
 // A window destroyed while its children still emit signals must not receive them any more: FFmpeg

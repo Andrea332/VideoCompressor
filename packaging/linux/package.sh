@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Creates <build>/VideoCompressor-<version>-linux-<x86_64|aarch64>.AppImage, for the processor of this
 # machine, from a configured and built build folder, with linuxdeploy and its Qt plugin (downloaded into
-# <build>/tools if missing).
+# <build>/tools if missing); and the portable version, the same files in a folder:
+# <build>/VideoCompressor-<version>-linux-<arch>-portable.tar.gz
 #
 # Usage:  QMAKE=/path/to/Qt/bin/qmake packaging/linux/package.sh [build]
 set -euo pipefail
 
 build=$(realpath "${1:-build}")
+root=$(realpath "$(dirname "$0")/../..")
 version=$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' "$build/CMakeCache.txt")
 appdir="$build/AppDir"
 tools="$build/tools"
@@ -51,3 +53,13 @@ echo "Created $LDAI_OUTPUT"
 glibc=$(find "$appdir" -type f \( -name '*.so*' -o -path '*/bin/*' \) -exec objdump -T {} + 2> /dev/null \
     | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n 1 || true)
 echo "Needs ${glibc:-an unknown glibc version}"
+
+# Portable version: the folder the AppImage is made of, to extract and run anywhere (no FUSE needed).
+# VideoCompressor.ini at its top makes the app keep its settings there instead of in ~/.config.
+portable="VideoCompressor-$version-linux-$arch-portable"
+rm -rf "${build:?}/$portable"
+cp -a "$appdir" "$build/$portable"
+ln -s AppRun "$build/$portable/VideoCompressor"
+cp "$root/packaging/portable/VideoCompressor.ini" "$build/$portable/"
+tar -C "$build" -czf "$build/$portable.tar.gz" "$portable"
+echo "Created $build/$portable.tar.gz"

@@ -11,7 +11,7 @@
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-    QApplication::setOrganizationName("Andrea Galet");   // where QSettings keeps the preferences
+    QApplication::setOrganizationName("Andrea Galet");   // where QSettings keeps the preferences (see settings.h)
     QApplication::setApplicationName("Video Compressor");
     QApplication::setApplicationVersion(APP_VERSION);
 

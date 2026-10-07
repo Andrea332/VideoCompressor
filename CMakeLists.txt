@@ -14,6 +14,7 @@ add_library(vc_core STATIC
     src/encodercheck.cpp src/encodercheck.h
     src/mainwindow.cpp src/mainwindow.h
     src/media.cpp src/media.h
+    src/settings.cpp src/settings.h
     src/sizeestimator.cpp src/sizeestimator.h
     src/spinner.cpp src/spinner.h
     src/systeminfo.cpp src/systeminfo.h
@@ -72,6 +73,7 @@ if(BUILD_TESTING)
     find_package(Qt6 REQUIRED COMPONENTS Test)
     qt_add_executable(tst_video_compressor tests/tst_video_compressor.cpp)
     target_link_libraries(tst_video_compressor PRIVATE vc_core Qt6::Test)
+    target_compile_definitions(tst_video_compressor PRIVATE SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     set_target_properties(tst_video_compressor PROPERTIES WIN32_EXECUTABLE FALSE MACOSX_BUNDLE FALSE)   # console output
     add_test(NAME tst_video_compressor COMMAND tst_video_compressor)
     get_target_property(_qmake Qt6::qmake IMPORTED_LOCATION)
@@ -158,6 +160,9 @@ if(WIN32)
     set(CPACK_CREATE_DESKTOP_LINKS VideoCompressor)
     set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
     set(CPACK_GENERATOR ZIP)
+    # the zip is the portable version (VideoCompressor-<version>-win64-portable.zip)
+    set(CPACK_PROJECT_CONFIG_FILE "${CMAKE_SOURCE_DIR}/packaging/windows/cpack_options.cmake")
+    set(CPACK_PORTABLE_FILES_DIR "${CMAKE_SOURCE_DIR}/packaging/portable")
 
     set(_pf86 "ProgramFiles(x86)")
     find_program(INNO_SETUP_COMPILER ISCC HINTS "$ENV{LOCALAPPDATA}/Programs/Inno Setup 6" "$ENV{${_pf86}}/Inno Setup 6"

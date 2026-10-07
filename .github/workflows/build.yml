@@ -128,7 +128,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # the portable zip's copy: its VideoCompressor.ini keeps the settings in the folder
           $app = Get-ChildItem build/_CPack_Packages/*/ZIP -Recurse -Filter VideoCompressor.exe | Select-Object -First 1
+          if (-not (Test-Path "$($app.DirectoryName)/VideoCompressor.ini")) { throw "no VideoCompressor.ini in the zip" }
           & "$($app.DirectoryName)/ffmpeg/ffmpeg.exe" -hide_banner -version | Select-Object -First 1
           $p = Start-Process $app.FullName -PassThru
           Start-Sleep -Seconds 10
@@ -137,6 +139,7 @@ jobs:
           # a Qt error dialog would keep the process alive too: the main window must be there
           if ($p.MainWindowTitle -notlike "Video Compressor*") { throw "unexpected window: '$($p.MainWindowTitle)'" }
           Stop-Process -Id $p.Id
+          Get-Content "$($app.DirectoryName)/VideoCompressor.ini"   # with the update check's date, if it got online
 
       - name: Smoke test of the package (Linux)
         if: runner.os == 'Linux'
@@ -148,6 +151,13 @@ jobs:
           status=0
           xvfb-run -a timeout 10 squashfs-root/AppRun || status=$?
           [ "$status" -eq 124 ] || { echo "the app exited with code $status"; exit 1; }
+          # the portable folder, run from where it is extracted
+          mkdir portable && tar -C portable -xzf VideoCompressor-*-portable.tar.gz
+          launcher=$(ls -d portable/*/VideoCompressor)
+          [ -f "$(dirname "$launcher")/VideoCompressor.ini" ] || { echo "no VideoCompressor.ini"; exit 1; }
+          status=0
+          xvfb-run -a timeout 10 "$launcher" || status=$?
+          [ "$status" -eq 124 ] || { echo "the portable app exited with code $status"; exit 1; }
 
       - name: Smoke test of the package (macOS)
         if: runner.os == 'macOS'
@@ -159,6 +169,9 @@ jobs:
           sleep 10
           kill -0 "$pid" || { echo "the app exited"; exit 1; }
           kill "$pid"
+          # the portable zip has the whole app, still signed
+          ditto -x -k build/VideoCompressor-*-portable.zip portable
+          codesign --verify --deep --strict portable/VideoCompressor.app
 
       - uses: actions/upload-artifact@v4
         with:
@@ -170,6 +183,7 @@ jobs:
             build/VideoCompressor-*-win*.zip
             build/VideoCompressor-*.AppImage
             build/VideoCompressor-*.dmg
+            build/VideoCompressor-*-portable.*
 
   # Tests built with AddressSanitizer and UndefinedBehaviorSanitizer: any invalid memory access, in the app
   # or in Qt while it uses the app's objects, stops the tests with the exact place
