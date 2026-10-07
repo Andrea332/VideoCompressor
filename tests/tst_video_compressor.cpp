@@ -653,14 +653,19 @@ void TestVideoCompressor::notifiesAboutUpdates()
     QVERIFY(!w.updateBar_->isVisible());
 }
 
-// A window destroyed while FFmpeg is still running (preview, estimate, GPU tests) must not receive their
-// signals any more: on Linux this used to corrupt the heap at exit.
+// A window destroyed while its children still emit signals must not receive them any more: FFmpeg
+// processes finishing (preview, estimate, GPU tests) and the path field, which emits editingFinished
+// when it loses the focus as the window closes. This used to corrupt the heap at exit (seen on Linux;
+// the sanitizer job reports it every time).
 void TestVideoCompressor::survivesClosingWhileBusy()
 {
     for (int delayMs : {0, 300, 800}) {
         auto window = std::make_unique<MainWindow>();
         window->showMessage = [](QMessageBox::Icon, const QString &, const QString &) {};
+        window->show();
+        window->activateWindow();
         window->setInput(path("long.mp4"));
+        window->inEdit_->setFocus();
         QTest::qWait(delayMs);
         QVERIFY(window->previewProc_ || window->estTimer_->isActive() || window->estimator_->running()
                 || delayMs > 0);

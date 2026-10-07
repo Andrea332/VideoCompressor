@@ -388,12 +388,15 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    // QWidget deletes its children before disconnecting them: stop the FFmpeg processes now, so that their
-    // "finished" signal can't reach this window while its members are being destroyed
+    // After this destructor, QWidget's own one still closes the window and deletes the children, and they
+    // keep emitting signals: the path field emits editingFinished when it loses the focus, a running
+    // FFmpeg process emits finished. Disconnect them all from this window first, since its members are
+    // about to be destroyed, then stop the processes.
+    for (QObject *child : findChildren<QObject *>())
+        child->disconnect(this);
     estimator_->stop();
     updater_->cancelDownload();
     for (QProcess *proc : findChildren<QProcess *>(Qt::FindDirectChildrenOnly)) {
-        proc->disconnect(this);
         if (proc->state() != QProcess::NotRunning) {
             proc->kill();
             proc->waitForFinished(3000);
