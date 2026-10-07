@@ -113,6 +113,7 @@ private:
 
     // updates
     void checkForUpdates(bool manual);
+    void saveLastUpdateCheck();
     void onUpdateAvailable(const UpdateInfo &info);
     bool canSelfUpdate() const;
     void startUpdate();

@@ -223,7 +223,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(updater_, &UpdateChecker::updateAvailable, this, &MainWindow::onUpdateAvailable);
     connect(updater_, &UpdateChecker::upToDate, this, [this] {
-        appSettings()->setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
+        saveLastUpdateCheck();
         if (manualUpdateCheck_)
             updateStatus_->setText("✔ You have the latest version");
         manualUpdateCheck_ = false;
@@ -1408,9 +1408,16 @@ void MainWindow::checkForUpdates(bool manual)
     updater_->check();
 }
 
+// As text (2026-10-08T09:30:00Z), readable in the portable version's VideoCompressor.ini; it's read back
+// as a date like the values that older versions saved as dates.
+void MainWindow::saveLastUpdateCheck()
+{
+    appSettings()->setValue("updates/lastCheck", QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+}
+
 void MainWindow::onUpdateAvailable(const UpdateInfo &info)
 {
-    appSettings()->setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
+    saveLastUpdateCheck();
     pendingUpdate_ = info;
     updateText_->setText(QString("<b>Video Compressor %1</b> is available (you have %2).")
                              .arg(info.version.toHtmlEscaped(), QCoreApplication::applicationVersion()));

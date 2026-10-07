@@ -827,6 +827,15 @@ void TestVideoCompressor::notifiesAboutUpdates()
     QCOMPARE(w.updateBtn_->text(), QString("Download"));
     QTest::mouseClick(w.laterBtn_, Qt::LeftButton);
     QVERIFY(!w.updateBar_->isVisible());
+
+    // the time of the check is saved as readable text (the portable versions' settings file can be opened)
+    // and read back as a date
+    const QDateTime saved = QSettings().value("updates/lastCheck").toDateTime();
+    QVERIFY(saved.isValid() && saved.secsTo(QDateTime::currentDateTimeUtc()) < 60);
+    QFile ini(QSettings().fileName());
+    QVERIFY(ini.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(ini.readAll());
+    QVERIFY2(text.contains("lastCheck=" + QString::number(QDate::currentDate().year())), qPrintable(text));
 }
 
 // The portable versions come with VideoCompressor.ini next to the program, and keep their settings in it.
