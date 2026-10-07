@@ -17,9 +17,23 @@ inline constexpr double SAMPLE_LEN = 4.0;            // seconds per sample
 inline constexpr double WHOLE_IF_SHORTER = 20.0;     // shorter videos are encoded whole (exact estimate)
 inline constexpr double CONTAINER_OVERHEAD = 1.01;   // ~1% for the container
 inline constexpr double LIMIT_MARGIN = 0.94;         // safety margin for "Fit to limit"
+inline constexpr double GPU_VBR_LIMIT_MARGIN = 0.90; // GPU encoders follow an average bitrate less closely
 inline constexpr double MB = 1024.0 * 1024.0;
 
+// How the encoder decides how many bits each part of the video gets
+enum class RateMode {
+    Quality,    // constant quality: as many bits as each scene needs (CRF, CQ, QP...)
+    Vbr,        // average bitrate, more for complex scenes and less for simple ones
+    Cbr,        // the same bitrate all the time
+};
+
+struct RateControl {
+    RateMode mode = RateMode::Quality;
+    int value = 0;              // quality on the encoder's scale, or kbps for VBR and CBR
+};
+
 using QualityArgs = std::function<QStringList(int quality)>;
+using BitrateArgs = std::function<QStringList(int kbps)>;
 using GopArgs = std::function<QStringList(int frames, int seconds)>;
 using SpeedArgs = QMap<QString, QStringList>;        // "fast"/"balanced"/"best" -> ffmpeg args
 
@@ -36,6 +50,8 @@ struct VideoCodec {
     QualityScale quality;
     QString qName;              // name of the quality parameter shown in the UI
     QualityArgs qArgs;
+    BitrateArgs vbrArgs;        // empty = the encoder has no variable bitrate mode
+    BitrateArgs cbrArgs;        // empty = the encoder has no constant bitrate mode
     SpeedArgs speeds;           // empty = no presets
     QString pixFmt = "yuv420p";
     double halving = 6;         // quality steps that roughly halve the size (first guess for "Fit to limit")
@@ -46,9 +62,14 @@ struct VideoCodec {
 
     bool hardware() const { return !vendor.isEmpty(); }
     int shownQuality(int value) const { return qShown ? qShown(value) : value; }
+    // whether the encoder has this mode (GPU encoders may still refuse it, see EncoderCheck)
+    bool hasMode(RateMode mode) const;
     // gop: (frames, seconds) between keyframes, empty = encoder default
-    QStringList args(int quality, const QString &speed, std::optional<std::pair<int, int>> gop = {}) const;
+    QStringList args(const RateControl &rate, const QString &speed,
+                     std::optional<std::pair<int, int>> gop = {}) const;
 };
+
+QString rateModeName(RateMode mode);   // "VBR", "CBR" or "" for constant quality
 
 struct AudioCodec {
     QString label;
@@ -108,5 +129,8 @@ const std::vector<KeyframeInterval> &keyframeIntervals();
 
 const std::vector<int> &audioBitrates();
 inline constexpr int DEFAULT_AUDIO_KBPS = 96;
+inline constexpr int MIN_VIDEO_KBPS = 50;            // range of the video bitrate field (VBR and CBR)
+inline constexpr int MAX_VIDEO_KBPS = 200000;
+inline constexpr int DEFAULT_VIDEO_KBPS = 2500;
 const std::vector<int> &resolutionSteps();
 const std::vector<int> &fpsSteps();

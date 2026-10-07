@@ -7,8 +7,10 @@ repository layout that Qt uses since 6.11 on Windows.)
 
 Usage:   python ci/install_qt.py <version> <destination>
 Prints the Qt prefix to pass as CMAKE_PREFIX_PATH, e.g. C:/Qt/6.11.3/msvc2022_64
+On ARM64 (Windows on ARM, Linux aarch64) it installs Qt's native ARM64 build.
 """
 import hashlib
+import platform
 import shutil
 import subprocess
 import sys
@@ -22,12 +24,17 @@ MODULES = {"qtbase", "qtsvg", "qttools", "qttranslations", "qtwayland", "icu"}
 
 
 def repository(version):
-    """(repository folder, package name, folder name of the installed Qt) for this platform."""
+    """(repository folder, package name, folder name of the installed Qt) for this platform and processor."""
     v = version.replace(".", "")   # 6.11.3 -> 6113
+    arm = platform.machine().lower() in ("arm64", "aarch64")
+    if sys.platform == "win32" and arm:   # native ARM64 build (Windows on ARM)
+        return f"{REPOSITORY}/windows_arm64/desktop/qt6_{v}/qt6_{v}", f"qt.qt6.{v}.win64_msvc2022_arm64", "msvc2022_arm64"
     if sys.platform == "win32":
         return f"{REPOSITORY}/windows_x86/desktop/qt6_{v}/qt6_{v}_msvc2022_64", f"qt.qt6.{v}.win64_msvc2022_64", "msvc2022_64"
     if sys.platform == "darwin":
         return f"{REPOSITORY}/mac_x64/desktop/qt6_{v}/qt6_{v}", f"qt.qt6.{v}.clang_64", "macos"
+    if arm:   # built on Ubuntu 24.04: needs glibc 2.39 or later
+        return f"{REPOSITORY}/linux_arm64/desktop/qt6_{v}/qt6_{v}", f"qt.qt6.{v}.linux_gcc_arm64", "gcc_arm64"
     return f"{REPOSITORY}/linux_x64/desktop/qt6_{v}/qt6_{v}", f"qt.qt6.{v}.linux_gcc_64", "gcc_64"
 
 

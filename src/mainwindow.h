@@ -4,6 +4,7 @@
 #include "media.h"
 #include "updatechecker.h"
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QIcon>
 #include <QMap>
@@ -18,17 +19,22 @@
 
 class EncoderCheck;
 class SizeEstimator;
+class Spinner;
 class QCheckBox;
 class QComboBox;
+class QFormLayout;
 class QFrame;
 class QDoubleSpinBox;
 class QGroupBox;
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
+class QScrollArea;
 class QSlider;
+class QSpinBox;
 class QTimer;
 
 class MainWindow : public QWidget
@@ -54,6 +60,8 @@ private:
     // settings
     const Format &fmt() const;
     int quality() const;
+    RateMode rateMode() const;
+    RateControl rate() const;
     int keyint() const;
     const AudioCodec *audioCodec() const;
     int audioKbps() const;
@@ -64,6 +72,8 @@ private:
     QString encoderSummary() const;
     void onFormatChanged();
     void setCodec(const VideoCodec *codec);
+    void updateRateModes();
+    void onRateModeChanged();
     void onAudioCodecChanged();
     void updateAudioWidgets();
     QStringList videoArgs() const;
@@ -80,6 +90,7 @@ private:
     // fit to limit
     void fitToLimit();
     void setQuality(int value);
+    void setBitrate(int kbps);
     void fitStep();
 
     // input and output
@@ -96,6 +107,9 @@ private:
     void onFinished(int code, QProcess::ExitStatus status);
     void cancel();
     void setRunning(bool running);
+    void fitToContent();
+    enum class Outcome { Done, OverLimit, Failed };
+    void showOutcome(Outcome outcome, const QString &text);
 
     // updates
     void checkForUpdates(bool manual);
@@ -129,10 +143,12 @@ private:
     bool programmatic_ = false;
     bool encoding_ = false;
     bool cancelled_ = false;
+    bool resumeEstimate_ = false;         // an estimate was running when the compression started
     QProcess *proc_ = nullptr;
     QProcess *previewProc_ = nullptr;   // extracts the preview frame of the source video
     int previewGen_ = 0;                // discards frames of videos that are no longer loaded
     QString currentOutput_;
+    QElapsedTimer encodeClock_;
     QString outBuf_;
     QStringList stderrTail_;
 
@@ -144,6 +160,7 @@ private:
     bool manualUpdateCheck_ = false;
     bool downloadingUpdate_ = false;
 
+    QScrollArea *scroll_;   // holds everything else
     QFrame *updateBar_;
     QLabel *updateText_;
     QPushButton *updateBtn_;
@@ -162,6 +179,9 @@ private:
     QComboBox *accelCombo_;
     QComboBox *deviceCombo_;
     QLabel *encoderLabel_;
+    QComboBox *rateCombo_;
+    QSpinBox *bitrateSpin_;
+    QHBoxLayout *sliderRow_;
     QSlider *qualitySlider_;
     QLabel *qualityLabel_;
     QComboBox *resCombo_;
@@ -170,8 +190,10 @@ private:
     QComboBox *abitrateCombo_;
     QComboBox *speedCombo_;
     QComboBox *keyintCombo_;
+    QFormLayout *settingsForm_;
     QGroupBox *settingsBox_;
     QLabel *sizeLabel_;
+    Spinner *spinner_;   // turns while the size is being estimated
     QLabel *sizeDetail_;
     QDoubleSpinBox *limitSpin_;
     QLabel *limitStatus_;
@@ -181,6 +203,11 @@ private:
     QProgressBar *progress_;
     QPushButton *startBtn_;
     QPushButton *cancelBtn_;
+    QFrame *outcomeBar_;   // result of the last compression: done, over the limit or failed
+    QLabel *outcomeIcon_;
+    QLabel *outcomeTitle_;
+    QLabel *outcomeText_;
+    QPushButton *playBtn_;
     QPushButton *openBtn_;
     QPlainTextEdit *log_;
 };

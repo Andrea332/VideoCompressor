@@ -15,20 +15,26 @@ platforms: set the limit in MB and the app finds the best quality that fits.
 ## Download
 
 **[Download the latest version](https://github.com/Andrea332/VideoCompressor/releases/latest)**
-for Windows, macOS (Apple Silicon) or Linux. Previous versions and the changes
-in each one are on the
+for Windows (x64 or ARM64), macOS (Apple Silicon) or Linux (x86_64 or ARM64).
+Previous versions and the changes in each one are on the
 [releases page](https://github.com/Andrea332/VideoCompressor/releases).
 FFmpeg is included in every download: there is nothing else to install.
 
-### Windows 10/11 (64-bit)
+### Windows 10/11
 
-- **Installer** (`VideoCompressor-<version>-win64.exe`, the smaller download):
+There are two versions: `win64` for most PCs (Intel and AMD processors) and
+`win-arm64` for Windows 11 PCs with an ARM processor, such as Snapdragon X
+laptops. If you are not sure, open **Settings → System → About**: *System type*
+says "x64-based processor" or "ARM-based processor".
+
+- **Installer** (`VideoCompressor-<version>-win64.exe` or
+  `-win-arm64.exe`, the smaller download):
   run it and follow the steps. By default it installs for your user only, with
   no administrator rights; you can choose to install for all users instead.
   It adds Video Compressor to the Start menu (and, if you want, to the
   desktop), and you can uninstall it from Windows Settings like any other app.
   The app updates itself from then on (see *Updates* below).
-- **Portable zip** (`VideoCompressor-<version>-win64.zip`): extract it and run
+- **Portable zip** (`VideoCompressor-<version>-win64.zip` or `-win-arm64.zip`): extract it and run
   `VideoCompressor.exe` inside the extracted folder. Keep the folder as it is,
   because the program needs the files next to it (Qt libraries and the
   `ffmpeg` folder).
@@ -46,18 +52,21 @@ blocks it. Open **System Settings → Privacy & Security**, scroll down and clic
 **Open Anyway** next to the message about Video Compressor, then confirm. This
 is needed only once.
 
-### Linux (x86_64)
+### Linux (x86_64 or ARM64)
 
-Download `VideoCompressor-<version>-linux-x86_64.AppImage`, make it executable
-and run it:
+Download `VideoCompressor-<version>-linux-x86_64.AppImage` (most PCs) or
+`-linux-aarch64.AppImage` (ARM64, for example a Raspberry Pi 4 or 5 with a
+64-bit system), make it executable and run it:
 
 ```bash
-chmod +x VideoCompressor-*-linux-x86_64.AppImage
-./VideoCompressor-*-linux-x86_64.AppImage
+chmod +x VideoCompressor-*.AppImage
+./VideoCompressor-*.AppImage
 ```
 
-It works on distributions from 2022 on (for example Ubuntu 22.04, Debian 12,
-Fedora 36 and later). If it doesn't start because FUSE is missing, run it with
+The x86_64 version works on distributions from 2022 on (for example Ubuntu
+22.04, Debian 12, Fedora 36 and later), the ARM64 one on distributions from 2024
+on (Ubuntu 24.04, Debian 13, Fedora 40, Raspberry Pi OS based on Debian 13 and
+later). If it doesn't start because FUSE is missing, run it with
 `--appimage-extract-and-run`.
 
 ## Features
@@ -69,6 +78,19 @@ Fedora 36 and later). If it doesn't start because FUSE is missing, run it with
   encoded whole, so the estimate is exact.
 - **Fit quality to limit**: enter a maximum size in MB and the app
   automatically searches for the highest quality that stays under it.
+- **Constant quality or a bitrate of your choice**: by default the encoder
+  keeps the chosen quality and spends the bits each scene needs, which gives the
+  best quality for the size. You can instead set the video bitrate in kbps,
+  where the encoder has these modes:
+  - **Variable bitrate (VBR)**: the average you set, more for complex scenes
+    and less for simple ones (up to twice the average). Every encoder has it.
+  - **Constant bitrate (CBR)**: the same bitrate all the time, for streaming or
+    for devices that need it. x264, x265, VP9 and the GPU encoders have it;
+    SVT-AV1, VVenC and Xvid don't. GPU modes are offered only if the GPU accepts
+    them.
+
+  With a bitrate, the size is simply bitrate × duration, so it is shown right
+  away, and *Fit bitrate to limit* computes the bitrate that fits.
 - **Many output formats and codecs**:
 
   | Format | Video codecs | Audio codecs |
@@ -93,6 +115,7 @@ Fedora 36 and later). If it doesn't start because FUSE is missing, run it with
   The window always states which codec will be used, whether hardware
   acceleration is on and which device (GPU or CPU, by name) does the work.
   GPU encoding is much faster, but files are a bit larger at the same quality.
+  The ARM64 versions for Windows and Linux encode on the CPU.
 - **Any input video**: anything FFmpeg can read, including phone videos
   recorded in portrait, files with cover art and files with subtitles. The
   main video and the first audio track are kept; subtitles are not copied.
@@ -109,8 +132,13 @@ Fedora 36 and later). If it doesn't start because FUSE is missing, run it with
   videos with little motion such as screen recordings.
 - **Preview of the source video**: as soon as the path points to a video, a
   frame of it (at 10% of its length) appears next to it.
-- Drag and drop a video onto the window, progress bar, cancel button and a
-  button to open the folder of the created file.
+- **Hard to miss when it's done**: at the end a green box shows the new file,
+  its size and how much smaller it is than the original, with buttons to play
+  it or open its folder (orange if it came out over the limit, red with the
+  reason if FFmpeg failed). If the window is in the background, its taskbar
+  button flashes (on macOS the Dock icon bounces). While the size is being
+  estimated, a wheel turns next to it.
+- Drag and drop a video onto the window, progress bar and cancel button.
 - **FFmpeg included**: the packaged app needs nothing else installed.
 
 ## Updates
@@ -135,7 +163,8 @@ and macOS by [GitHub Actions](.github/workflows/build.yml); for a version tag
 the packages are uploaded to the release. The workflow shows the exact steps
 for each platform: `ci/install_qt.py` installs Qt, `ci/get_ffmpeg.py`
 downloads the FFmpeg that gets bundled, and `packaging/` creates the Linux
-AppImage and the macOS disk image.
+AppImage and the macOS disk image. The ARM64 versions are built and tested on
+GitHub's ARM64 machines, with Qt's and FFmpeg's native ARM64 builds.
 
 On Windows you need:
 
@@ -190,9 +219,10 @@ The FFmpeg builds bundled with the releases:
 
 | Platform | Build | Contents of `ffmpeg/` |
 |----------|-------|-----------------------|
-| Windows | [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) *full-shared* | `ffmpeg.exe`, `ffprobe.exe` and their DLLs |
+| Windows x64 | [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) *full-shared* | `ffmpeg.exe`, `ffprobe.exe` and their DLLs |
+| Windows ARM64 | [BtbN](https://github.com/BtbN/FFmpeg-Builds) *winarm64-gpl-shared* | `ffmpeg.exe`, `ffprobe.exe` and their DLLs |
 | macOS | [Martin Riedl](https://ffmpeg.martin-riedl.de/), static, Apple Silicon | `ffmpeg`, `ffprobe` |
-| Linux | [BtbN](https://github.com/BtbN/FFmpeg-Builds) *gpl-shared*, x86_64 | `bin/ffmpeg`, `bin/ffprobe`, `lib/` |
+| Linux | [BtbN](https://github.com/BtbN/FFmpeg-Builds) *gpl-shared*, x86_64 or ARM64 | `bin/ffmpeg`, `bin/ffprobe`, `lib/` |
 
 On Windows the *full-shared* build has every feature of the *full* build, but
 `ffmpeg.exe` and `ffprobe.exe` share one copy of the libraries instead of
@@ -210,10 +240,11 @@ build\make_icon.exe resources\icon.svg resources\icon-small.svg resources
 
 The tests (`tests/`) generate their own videos with FFmpeg and drive the real
 window offscreen: every format, codec and device combination (checking which
-encoder actually wrote the file), portrait phone videos, cover art, keyframe
-spacing and closed GOP, the position of the seek index, the accuracy of the
-estimate and *Fit quality to limit*. GPU encoders are tested only when the PC
-has them.
+encoder actually wrote the file), every bitrate mode of every encoder, portrait
+phone videos, cover art, keyframe spacing and closed GOP, the position of the
+seek index, the accuracy of the estimate, *Fit quality to limit* and *Fit
+bitrate to limit*, and the box shown at the end. GPU encoders are tested only
+when the PC has them.
 
 ## How the estimate works
 
@@ -230,6 +261,14 @@ has them.
 
 For videos longer than 20 seconds the margin of error is roughly ±10%. That
 is why *Fit quality to limit* aims for 94% of the limit you set.
+
+With a bitrate (VBR or CBR) nothing needs to be encoded: the size is the video
+and audio bitrates × the duration, plus about 1% for the container. Short
+samples would be misleading here, because encoders take a few seconds to settle
+on a bitrate. Encoders keep to a constant bitrate within a few %; with a
+variable one, simple videos (such as screen recordings) come out smaller, and
+GPU encoders can end up to about 10% above the average. *Fit bitrate to limit*
+aims for 94% of the limit, 90% for GPU encoders with a variable bitrate.
 
 With slow encoders the estimate takes longer, because the samples are really
 encoded: H.266/VVC can take a minute or more, while GPU encoders take a few

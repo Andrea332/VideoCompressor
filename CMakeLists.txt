@@ -15,11 +15,21 @@ add_library(vc_core STATIC
     src/mainwindow.cpp src/mainwindow.h
     src/media.cpp src/media.h
     src/sizeestimator.cpp src/sizeestimator.h
+    src/spinner.cpp src/spinner.h
     src/systeminfo.cpp src/systeminfo.h
     src/updatechecker.cpp src/updatechecker.h
 )
 target_include_directories(vc_core PUBLIC src)
 target_link_libraries(vc_core PUBLIC Qt6::Widgets Qt6::Network)
+
+# Processor of the Windows build, in the package names (VideoCompressor-2.4.0-win64.exe or -win-arm64.exe):
+# the update check downloads the installer for the same one
+if(CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "ARM64")
+    set(WINDOWS_PLATFORM win-arm64)
+else()
+    set(WINDOWS_PLATFORM win64)
+endif()
+target_compile_definitions(vc_core PUBLIC INSTALLER_PLATFORM="${WINDOWS_PLATFORM}")
 if(MSVC)
     target_compile_options(vc_core PUBLIC /utf-8 /W4 /permissive-)
 else()
@@ -141,7 +151,8 @@ if(WIN32)
     set(CPACK_VERBATIM_VARIABLES ON)   # values like {app}\VideoCompressor.exe are written as they are
     set(CPACK_PACKAGE_NAME "Video Compressor")
     set(CPACK_PACKAGE_VENDOR "Andrea Galet")
-    set(CPACK_PACKAGE_FILE_NAME "VideoCompressor-${PROJECT_VERSION}-win64")
+    set(CPACK_PACKAGE_FILE_NAME "VideoCompressor-${PROJECT_VERSION}-${WINDOWS_PLATFORM}")
+    set(CPACK_SYSTEM_NAME "${WINDOWS_PLATFORM}")
     set(CPACK_PACKAGE_INSTALL_DIRECTORY "Video Compressor")
     set(CPACK_PACKAGE_EXECUTABLES VideoCompressor "Video Compressor")   # Start menu shortcut
     set(CPACK_CREATE_DESKTOP_LINKS VideoCompressor)
@@ -154,7 +165,14 @@ if(WIN32)
     if(INNO_SETUP_COMPILER)
         list(APPEND CPACK_GENERATOR INNOSETUP)
         set(CPACK_INNOSETUP_EXECUTABLE "${INNO_SETUP_COMPILER}")
-        set(CPACK_INNOSETUP_ARCHITECTURE x64)
+        if(WINDOWS_PLATFORM STREQUAL "win-arm64")
+            set(CPACK_INNOSETUP_ARCHITECTURE arm64)
+        else()
+            set(CPACK_INNOSETUP_ARCHITECTURE x64)
+            # also on Windows on ARM, which runs x64 programs (the ARM64 installer is the better choice there)
+            set(CPACK_INNOSETUP_SETUP_ArchitecturesAllowed x64compatible)
+            set(CPACK_INNOSETUP_SETUP_ArchitecturesInstallIn64BitMode x64compatible)
+        endif()
         set(CPACK_INNOSETUP_USE_MODERN_WIZARD ON)
         set(CPACK_INNOSETUP_ICON_FILE "${CMAKE_SOURCE_DIR}/resources/icon.ico")
         set(CPACK_INNOSETUP_LANGUAGES english italian)

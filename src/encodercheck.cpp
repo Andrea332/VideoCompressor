@@ -1,11 +1,18 @@
 #include "encodercheck.h"
 
-#include "codecs.h"
-
 #include <QProcess>
 
+namespace {
+
+QString modeKey(const VideoCodec &codec, RateMode mode)
+{
+    return codec.encoder + "/" + rateModeName(mode);
+}
+
+} // namespace
+
 EncoderCheck::EncoderCheck(const QString &ffmpeg, QObject *parent)
-    : QObject(parent)
+    : QObject(parent), ffmpeg_(ffmpeg)
 {
     if (ffmpeg.isEmpty())
         return;
@@ -26,22 +33,37 @@ EncoderCheck::EncoderCheck(const QString &ffmpeg, QObject *parent)
         if (!listed.contains(codec.encoder))
             continue;
         if (codec.hardware())
-            test(ffmpeg, codec);
+            test(codec, RateMode::Quality);
         else
             available_.insert(codec.encoder);
     }
 }
 
-void EncoderCheck::test(const QString &ffmpeg, const VideoCodec &codec)
+bool EncoderCheck::supports(const VideoCodec &codec, RateMode mode) const
+{
+    if (!available_.contains(codec.encoder) || !codec.hasMode(mode))
+        return false;
+    return mode == RateMode::Quality || !codec.hardware() || bitrateModes_.contains(modeKey(codec, mode));
+}
+
+// Quality mode first: if the GPU can't encode at all, its bitrate modes are not tried.
+void EncoderCheck::test(const VideoCodec &codec, RateMode mode)
 {
     auto *proc = new QProcess(this);
     ++pending_;
-    const QString encoder = codec.encoder;
-    connect(proc, &QProcess::finished, this, [this, proc, encoder](int code, QProcess::ExitStatus status) {
+    connect(proc, &QProcess::finished, this, [this, proc, &codec, mode](int code, QProcess::ExitStatus status) {
         proc->deleteLater();
+        if (status == QProcess::NormalExit && code == 0) {
+            if (mode == RateMode::Quality) {
+                available_.insert(codec.encoder);
+                for (RateMode bitrate : {RateMode::Vbr, RateMode::Cbr})
+                    if (codec.hasMode(bitrate))
+                        test(codec, bitrate);
+            } else {
+                bitrateModes_.insert(modeKey(codec, mode));
+            }
+        }
         --pending_;
-        if (status == QProcess::NormalExit && code == 0)
-            available_.insert(encoder);
         emit changed();
     });
     connect(proc, &QProcess::errorOccurred, this, [this, proc](QProcess::ProcessError error) {
@@ -51,6 +73,7 @@ void EncoderCheck::test(const QString &ffmpeg, const VideoCodec &codec)
             emit changed();
         }
     });
-    proc->start(ffmpeg, QStringList{"-hide_banner", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=0.2"}
-                            + codec.args(codec.quality.def, "balanced") + QStringList{"-f", "null", "-"});
+    const RateControl rate{mode, mode == RateMode::Quality ? codec.quality.def : 1000};
+    proc->start(ffmpeg_, QStringList{"-hide_banner", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=0.2"}
+                             + codec.args(rate, "balanced") + QStringList{"-f", "null", "-"});
 }

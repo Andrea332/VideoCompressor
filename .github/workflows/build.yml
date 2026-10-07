@@ -1,4 +1,4 @@
-# Builds, tests and packages the app on Windows, Linux and macOS (Apple Silicon).
+# Builds, tests and packages the app on Windows and Linux (x64 and ARM64) and macOS (Apple Silicon).
 # For a version tag (v1.2.3) the packages are also uploaded to that release, as a draft if it doesn't exist yet.
 name: Build
 
@@ -26,8 +26,13 @@ jobs:
         include:
           - name: Windows
             os: windows-2025
+          - name: Windows (ARM64)
+            os: windows-11-arm
           - name: Linux
             os: ubuntu-22.04
+          # Qt's ARM64 build for Linux is made on Ubuntu 24.04: the AppImage needs its glibc (2.39) or later
+          - name: Linux (ARM64)
+            os: ubuntu-24.04-arm
           - name: macOS (Apple Silicon)
             os: macos-15
     steps:
@@ -35,15 +40,18 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"   # the first with a Windows ARM64 build here
+          architecture: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
 
       - name: Install tools (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && runner.arch == 'X64'   # the ARM64 image already has them
         run: choco install innosetup ninja -y --no-progress
 
       - name: Visual Studio environment (Windows)
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
 
       - name: Install tools (Linux)
         if: runner.os == 'Linux'
@@ -79,13 +87,14 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      # verbose: the log shows which encoders this machine has and how accurate the estimates were
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --verbose
 
       # The picture at the top of the README: it is attached to every release with the same name, and the
       # README shows the one of the latest release
       - name: Screenshot for the README (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && runner.arch == 'X64'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force C:\Videos | Out-Null
@@ -119,7 +128,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $app = Get-ChildItem build/_CPack_Packages/win64/ZIP -Recurse -Filter VideoCompressor.exe | Select-Object -First 1
+          $app = Get-ChildItem build/_CPack_Packages/*/ZIP -Recurse -Filter VideoCompressor.exe | Select-Object -First 1
           & "$($app.DirectoryName)/ffmpeg/ffmpeg.exe" -hide_banner -version | Select-Object -First 1
           $p = Start-Process $app.FullName -PassThru
           Start-Sleep -Seconds 10
@@ -153,12 +162,12 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: VideoCompressor-${{ runner.os }}
+          name: VideoCompressor-${{ runner.os }}-${{ runner.arch }}
           if-no-files-found: error
           path: |
             build/VideoCompressor-screenshot.png
-            build/VideoCompressor-*-win64.exe
-            build/VideoCompressor-*-win64.zip
+            build/VideoCompressor-*-win*.exe
+            build/VideoCompressor-*-win*.zip
             build/VideoCompressor-*.AppImage
             build/VideoCompressor-*.dmg
 
@@ -173,7 +182,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - name: Install tools
         run: |

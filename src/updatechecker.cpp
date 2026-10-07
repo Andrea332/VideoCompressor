@@ -55,7 +55,7 @@ std::optional<UpdateInfo> UpdateChecker::parseLatestRelease(const QByteArray &js
     for (const QJsonValue &value : release.value("assets").toArray()) {
         const QJsonObject asset = value.toObject();
         const QString name = asset.value("name").toString();
-        if (name.endsWith("-win64.exe", Qt::CaseInsensitive)) {
+        if (name.endsWith(INSTALLER_SUFFIX, Qt::CaseInsensitive)) {
             info.installerName = name;
             info.installerUrl = QUrl(asset.value("browser_download_url").toString());
             const QString digest = asset.value("digest").toString();   // "sha256:<hex>"

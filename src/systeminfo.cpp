@@ -63,6 +63,27 @@ QString pciDeviceName(const QString &vendorId, const QString &deviceId)
     }
     return {};
 }
+
+// Name of an ARM core design from the ids in /proc/cpuinfo, e.g. ("0x41", "0xd0b") -> "Cortex-A76"
+QString armCoreName(const QString &implementer, const QString &part)
+{
+    static const QMap<QString, QString> arm = {
+        {"0xd03", "Cortex-A53"}, {"0xd04", "Cortex-A35"}, {"0xd05", "Cortex-A55"}, {"0xd07", "Cortex-A57"},
+        {"0xd08", "Cortex-A72"}, {"0xd09", "Cortex-A73"}, {"0xd0a", "Cortex-A75"}, {"0xd0b", "Cortex-A76"},
+        {"0xd0c", "Neoverse-N1"}, {"0xd0d", "Cortex-A77"}, {"0xd40", "Neoverse-V1"}, {"0xd41", "Cortex-A78"},
+        {"0xd44", "Cortex-X1"}, {"0xd46", "Cortex-A510"}, {"0xd47", "Cortex-A710"}, {"0xd48", "Cortex-X2"},
+        {"0xd49", "Neoverse-N2"}, {"0xd4b", "Cortex-A78C"}, {"0xd4d", "Cortex-A715"}, {"0xd4e", "Cortex-X3"},
+        {"0xd4f", "Neoverse-V2"}, {"0xd80", "Cortex-A520"}, {"0xd81", "Cortex-A720"}, {"0xd82", "Cortex-X4"},
+        {"0xd84", "Neoverse-V3"}, {"0xd85", "Cortex-X925"}, {"0xd87", "Cortex-A725"}, {"0xd8e", "Neoverse-N3"}};
+    const QString id = part.toLower();
+    if (implementer == "0x41" && arm.contains(id))
+        return "ARM " + arm.value(id);
+    if (implementer == "0x51")
+        return id == "0x001" ? QStringLiteral("Qualcomm Oryon") : QStringLiteral("Qualcomm");
+    if (implementer == "0x61")
+        return QStringLiteral("Apple Silicon");   // Asahi Linux
+    return QStringLiteral("ARM");
+}
 #endif
 
 } // namespace
@@ -122,13 +143,29 @@ QString cpuName()
     const QString name = sysctlString("machdep.cpu.brand_string");
 #elif defined(Q_OS_LINUX)
     QString name;
+    QStringList cores;   // ARM: no model name, only the ids of the core designs (big.LITTLE: more than one)
+    QString implementer;
     QFile cpuinfo("/proc/cpuinfo");
     if (cpuinfo.open(QIODevice::ReadOnly))
-        for (const QByteArray &line : cpuinfo.readAll().split('\n'))
-            if (line.startsWith("model name")) {
-                name = QString::fromUtf8(line.mid(line.indexOf(':') + 1)).simplified();
-                break;
+        for (const QByteArray &line : cpuinfo.readAll().split('\n')) {
+            const QString value = QString::fromUtf8(line.mid(line.indexOf(':') + 1)).simplified();
+            if (line.startsWith("model name") && name.isEmpty())
+                name = value;
+            else if (line.startsWith("CPU implementer"))
+                implementer = value;
+            else if (line.startsWith("CPU part")) {
+                const QString core = armCoreName(implementer, value);
+                if (!cores.contains(core))
+                    cores.prepend(core);   // the big cores are usually listed last
             }
+        }
+    if (name.isEmpty() && !cores.isEmpty()) {
+        name = cores.join(" + ");
+        // boards like the Raspberry Pi have their name in the device tree
+        const QString board = readFirstLine("/sys/firmware/devicetree/base/model").remove(QChar(0)).trimmed();
+        if (!board.isEmpty())
+            name = board + " (" + name + ")";
+    }
 #else
     const QString name;
 #endif

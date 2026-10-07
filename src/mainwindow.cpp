@@ -2,8 +2,10 @@
 
 #include "encodercheck.h"
 #include "sizeestimator.h"
+#include "spinner.h"
 #include "systeminfo.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -29,8 +31,13 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScreen>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSlider>
+#include <QSpinBox>
+#include <QStandardItemModel>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
@@ -85,6 +92,60 @@ QIcon boltIcon(const QColor &color = QColor())
     return QIcon(pix);
 }
 
+// Round badge with a white check mark, exclamation mark or cross, for the result of a compression.
+QPixmap badge(const QColor &color, char symbol, int size, qreal dpr)
+{
+    QPixmap pix(qRound(size * dpr), qRound(size * dpr));
+    pix.setDevicePixelRatio(dpr);
+    pix.fill(Qt::transparent);
+    QPainter p(&pix);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(color);
+    p.drawEllipse(QRectF(0, 0, size, size));
+    p.setPen(QPen(Qt::white, size / 9.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const auto at = [size](double x, double y) { return QPointF(x * size, y * size); };
+    if (symbol == 'v') {
+        p.drawPolyline(QPolygonF({at(0.28, 0.52), at(0.44, 0.68), at(0.73, 0.36)}));
+    } else if (symbol == '!') {
+        p.drawLine(at(0.5, 0.25), at(0.5, 0.56));
+        p.drawPoint(at(0.5, 0.74));
+    } else {
+        p.drawLine(at(0.34, 0.34), at(0.66, 0.66));
+        p.drawLine(at(0.66, 0.34), at(0.34, 0.66));
+    }
+    return pix;
+}
+
+// Scrolls only vertically: it is as wide as its content needs, so the window can't get narrower than that.
+class VerticalScrollArea : public QScrollArea
+{
+public:
+    QSize minimumSizeHint() const override
+    {
+        const int content = widget() ? widget()->minimumSizeHint().width() : 0;
+        return {content + verticalScrollBar()->sizeHint().width(), QScrollArea::minimumSizeHint().height()};
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (watched == widget() && event->type() == QEvent::LayoutRequest)
+            updateGeometry();   // the content changed: its width may have too
+        return QScrollArea::eventFilter(watched, event);
+    }
+};
+
+// Explanations of the rate control modes, in the order of the menu
+const char *const RATE_TIPS[] = {
+    "The encoder gives each scene the bits it needs to keep the chosen quality:\n"
+    "the best quality for the size. The size is estimated by encoding a few samples.",
+    "An average bitrate of your choice: complex scenes get more, simple ones less\n"
+    "(up to twice the average). The size is about bitrate × duration, smaller for simple videos.",
+    "The same bitrate all the time, for streaming or for devices that need it.\n"
+    "The size is bitrate × duration; the quality changes from scene to scene.",
+};
+
 QString withSuffix(const QString &path, const QString &ext)
 {
     const QString suffix = QFileInfo(path).suffix();
@@ -111,7 +172,6 @@ MainWindow::MainWindow(QWidget *parent)
     const QString version = QCoreApplication::applicationVersion();
     setWindowTitle(version.isEmpty() ? QString("Video Compressor") : "Video Compressor " + version);
     setAcceptDrops(true);
-    resize(640, 800);
 
     ffmpeg_ = findTool("ffmpeg");
     ffprobe_ = findTool("ffprobe");
@@ -231,16 +291,35 @@ MainWindow::MainWindow(QWidget *parent)
     accelRow->addWidget(accelCombo_);
     accelRow->addWidget(deviceCombo_, 1);
     encoderLabel_ = new QLabel;   // always states codec, hardware acceleration and device
-    encoderLabel_->setWordWrap(true);
+    // a table that needs no wrapping: always its own height, neither squeezed nor stretched by the window
+    encoderLabel_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+    // constant quality (the slider) or a bitrate, variable or constant, when the encoder has it
+    rateCombo_ = new QComboBox;
+    rateCombo_->addItem("Constant quality (recommended)", int(RateMode::Quality));
+    rateCombo_->addItem("Variable bitrate (VBR)", int(RateMode::Vbr));
+    rateCombo_->addItem("Constant bitrate (CBR)", int(RateMode::Cbr));
+    for (int i = 0; i < rateCombo_->count(); ++i)
+        rateCombo_->setItemData(i, QString(RATE_TIPS[i]), Qt::ToolTipRole);
+    bitrateSpin_ = new QSpinBox;
+    bitrateSpin_->setRange(MIN_VIDEO_KBPS, MAX_VIDEO_KBPS);
+    bitrateSpin_->setSingleStep(100);
+    bitrateSpin_->setValue(DEFAULT_VIDEO_KBPS);
+    bitrateSpin_->setSuffix(" kbps");
+    bitrateSpin_->setToolTip("Video bitrate. The audio bitrate is set below, next to the audio codec.");
+    bitrateSpin_->hide();
+    auto *rateRow = new QHBoxLayout;
+    rateRow->addWidget(rateCombo_, 1);
+    rateRow->addWidget(bitrateSpin_);
 
     qualitySlider_ = new QSlider(Qt::Horizontal);
     qualitySlider_->setInvertedAppearance(true);   // right = higher quality
     qualitySlider_->setInvertedControls(true);
     qualityLabel_ = new QLabel;
-    auto *sliderRow = new QHBoxLayout;
-    sliderRow->addWidget(new QLabel("Smaller file"));
-    sliderRow->addWidget(qualitySlider_, 1);
-    sliderRow->addWidget(new QLabel("Higher quality"));
+    sliderRow_ = new QHBoxLayout;
+    sliderRow_->addWidget(new QLabel("Smaller file"));
+    sliderRow_->addWidget(qualitySlider_, 1);
+    sliderRow_->addWidget(new QLabel("Higher quality"));
 
     resCombo_ = new QComboBox;
     fpsCombo_ = new QComboBox;
@@ -263,26 +342,29 @@ MainWindow::MainWindow(QWidget *parent)
         "More frequent keyframes give faster, more precise seeking (useful for editing\n"
         "and streaming) but a bigger file, especially for videos with little motion.");
 
-    auto *form = new QFormLayout;
-    form->addRow("Format:", formatCombo_);
-    form->addRow("Video codec:", vcodecCombo_);
-    form->addRow("Hardware acceleration:", accelRow);
-    form->addRow("", encoderLabel_);
-    form->addRow("Quality:", sliderRow);
-    form->addRow("", qualityLabel_);
-    form->addRow("Resolution:", resCombo_);
-    form->addRow("Frame rate:", fpsCombo_);
-    form->addRow("Audio:", audioRow);
-    form->addRow("Speed:", speedCombo_);
-    form->addRow("Keyframes:", keyintCombo_);
+    settingsForm_ = new QFormLayout;
+    settingsForm_->addRow("Format:", formatCombo_);
+    settingsForm_->addRow("Video codec:", vcodecCombo_);
+    settingsForm_->addRow("Hardware acceleration:", accelRow);
+    settingsForm_->addRow("", encoderLabel_);
+    settingsForm_->addRow("Rate control:", rateRow);
+    settingsForm_->addRow("Quality:", sliderRow_);
+    settingsForm_->addRow("", qualityLabel_);
+    settingsForm_->addRow("Resolution:", resCombo_);
+    settingsForm_->addRow("Frame rate:", fpsCombo_);
+    settingsForm_->addRow("Audio:", audioRow);
+    settingsForm_->addRow("Speed:", speedCombo_);
+    settingsForm_->addRow("Keyframes:", keyintCombo_);
     settingsBox_ = new QGroupBox("Settings");
-    settingsBox_->setLayout(form);
+    settingsBox_->setLayout(settingsForm_);
     settingsBox_->setEnabled(false);
 
     connect(formatCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onFormatChanged);
     for (QComboBox *combo : {vcodecCombo_, accelCombo_, deviceCombo_})
         connect(combo, &QComboBox::currentIndexChanged, this, &MainWindow::updateEncoder);
     connect(acodecCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onAudioCodecChanged);
+    connect(rateCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onRateModeChanged);
+    connect(bitrateSpin_, &QSpinBox::valueChanged, this, &MainWindow::onSettingsChanged);
     connect(qualitySlider_, &QSlider::valueChanged, this, &MainWindow::onSettingsChanged);
     for (QComboBox *combo : {resCombo_, fpsCombo_, abitrateCombo_, speedCombo_, keyintCombo_})
         connect(combo, &QComboBox::currentIndexChanged, this, &MainWindow::onSettingsChanged);
@@ -293,6 +375,12 @@ MainWindow::MainWindow(QWidget *parent)
     font.setPointSize(font.pointSize() + 10);
     font.setBold(true);
     sizeLabel_->setFont(font);
+    spinner_ = new Spinner(QFontMetrics(font).height() * 3 / 4);
+    auto *sizeRow = new QHBoxLayout;
+    sizeRow->setSpacing(12);
+    sizeRow->addWidget(sizeLabel_);
+    sizeRow->addWidget(spinner_, 0, Qt::AlignVCenter);
+    sizeRow->addStretch();
     sizeDetail_ = new QLabel("Load a video to see the estimate.");
     sizeDetail_->setWordWrap(true);
 
@@ -314,7 +402,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     auto *previewBox = new QGroupBox("Estimated output size");
     auto *previewLayout = new QVBoxLayout(previewBox);
-    previewLayout->addWidget(sizeLabel_);
+    previewLayout->addLayout(sizeRow);
     previewLayout->addWidget(sizeDetail_);
     previewLayout->addLayout(limitRow);
 
@@ -335,14 +423,43 @@ MainWindow::MainWindow(QWidget *parent)
     cancelBtn_ = new QPushButton("Cancel");
     cancelBtn_->setEnabled(false);
     connect(cancelBtn_, &QPushButton::clicked, this, &MainWindow::cancel);
-    openBtn_ = new QPushButton("Open folder");
-    openBtn_->setEnabled(false);
-    connect(openBtn_, &QPushButton::clicked, this, &MainWindow::openFolder);
     auto *btnRow = new QHBoxLayout;
     btnRow->addWidget(startBtn_);
     btnRow->addWidget(cancelBtn_);
     btnRow->addStretch();
-    btnRow->addWidget(openBtn_);
+
+    // --- Result of the last compression, hard to miss (hidden until one ends) ---
+    outcomeBar_ = new QFrame;
+    outcomeBar_->setObjectName("outcomeBar");
+    outcomeIcon_ = new QLabel;
+    outcomeTitle_ = new QLabel;
+    QFont titleFont = outcomeTitle_->font();
+    titleFont.setPointSize(titleFont.pointSize() + 3);
+    titleFont.setBold(true);
+    outcomeTitle_->setFont(titleFont);
+    outcomeText_ = new QLabel;
+    outcomeText_->setWordWrap(true);
+    outcomeText_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    playBtn_ = new QPushButton("Play");
+    playBtn_->setToolTip("Open the compressed video with the default player");
+    connect(playBtn_, &QPushButton::clicked, this, [this] {
+        if (!currentOutput_.isEmpty())
+            QDesktopServices::openUrl(QUrl::fromLocalFile(currentOutput_));
+    });
+    openBtn_ = new QPushButton("Open folder");
+    openBtn_->setEnabled(false);
+    connect(openBtn_, &QPushButton::clicked, this, &MainWindow::openFolder);
+    auto *outcomeTexts = new QVBoxLayout;
+    outcomeTexts->setSpacing(2);
+    outcomeTexts->addWidget(outcomeTitle_);
+    outcomeTexts->addWidget(outcomeText_);
+    auto *outcomeRow = new QHBoxLayout(outcomeBar_);
+    outcomeRow->setSpacing(12);
+    outcomeRow->addWidget(outcomeIcon_, 0, Qt::AlignTop);
+    outcomeRow->addLayout(outcomeTexts, 1);
+    outcomeRow->addWidget(playBtn_, 0, Qt::AlignVCenter);
+    outcomeRow->addWidget(openBtn_, 0, Qt::AlignVCenter);
+    outcomeBar_->hide();
 
     log_ = new QPlainTextEdit;
     log_->setReadOnly(true);
@@ -360,7 +477,9 @@ MainWindow::MainWindow(QWidget *parent)
     updateRow->addWidget(checkNowBtn_);
     updateRow->addWidget(updateStatus_, 1);
 
-    auto *layout = new QVBoxLayout(this);
+    // everything in a scroll area: on short screens the window scrolls instead of squeezing what's in it
+    auto *content = new QWidget;
+    auto *layout = new QVBoxLayout(content);
     layout->addWidget(updateBar_);
     layout->addWidget(srcBox);
     layout->addWidget(settingsBox_);
@@ -368,8 +487,20 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addLayout(outRow);
     layout->addWidget(progress_);
     layout->addLayout(btnRow);
+    layout->addWidget(outcomeBar_);
     layout->addWidget(log_);
+    layout->addStretch();   // spare height, if any, at the bottom rather than inside the boxes
     layout->addLayout(updateRow);
+    scroll_ = new VerticalScrollArea;
+    scroll_->setWidget(content);
+    scroll_->setWidgetResizable(true);
+    scroll_->setFrameShape(QFrame::NoFrame);
+    scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->addWidget(scroll_);
+    resize(std::max(640, scroll_->minimumSizeHint().width()), 0);
+    fitToContent();
 
     // automatic check: a few seconds after startup, at most once a day
     const QDateTime lastCheck = QSettings().value("updates/lastCheck").toDateTime();
@@ -444,6 +575,8 @@ void MainWindow::setInput(const QString &path)
     const std::optional<MediaInfo> media = probe(ffprobe_, path, &error);
     if (!media) {
         media_.reset();
+        spinner_->stop();
+        outcomeBar_->hide();
         loadPreview();
         settingsBox_->setEnabled(false);
         startBtn_->setEnabled(false);
@@ -485,6 +618,7 @@ void MainWindow::setInput(const QString &path)
 
     settingsBox_->setEnabled(true);
     openBtn_->setEnabled(false);
+    outcomeBar_->hide();
     loadPreview();
     onSettingsChanged();
 }
@@ -541,6 +675,16 @@ const Format &MainWindow::fmt() const
 int MainWindow::quality() const
 {
     return qualitySlider_->value();
+}
+
+RateMode MainWindow::rateMode() const
+{
+    return RateMode(rateCombo_->currentData().toInt());
+}
+
+RateControl MainWindow::rate() const
+{
+    return {rateMode(), rateMode() == RateMode::Quality ? quality() : bitrateSpin_->value()};
 }
 
 int MainWindow::keyint() const
@@ -700,15 +844,50 @@ void MainWindow::onFormatChanged()
 
 void MainWindow::setCodec(const VideoCodec *codec)
 {
-    if (codec == codec_)
-        return;
+    const bool changed = codec != codec_;
     codec_ = codec;
-    if (codec) {
+    if (changed && codec) {
         const QSignalBlocker blocker(qualitySlider_);
         qualitySlider_->setRange(codec->quality.best, codec->quality.worst);
         qualitySlider_->setValue(codec->quality.def);
         speedCombo_->setEnabled(!codec->speeds.isEmpty());
     }
+    updateRateModes();   // also when the codec is the same: a GPU test may have just finished
+    if (changed)
+        onSettingsChanged();
+}
+
+// Offers the rate control modes the encoder has; a GPU's ones only if they passed the test on this PC.
+void MainWindow::updateRateModes()
+{
+    auto *model = qobject_cast<QStandardItemModel *>(rateCombo_->model());
+    for (int i = 0; i < rateCombo_->count(); ++i) {
+        const bool ok = !codec_ || encoders_->supports(*codec_, RateMode(rateCombo_->itemData(i).toInt()));
+        model->item(i)->setEnabled(ok);
+        const QString tip = RATE_TIPS[i];
+        rateCombo_->setItemData(i, ok ? tip : tip + "\n\nNot available with " + codec_->label
+                                                   + (codec_->hardware() ? " on this PC." : "."),
+                                Qt::ToolTipRole);
+    }
+    if (codec_ && !encoders_->supports(*codec_, rateMode())) {
+        // e.g. CBR, then a codec whose encoder hasn't it: the closest mode it has (this updates the estimate)
+        const bool vbr = rateMode() == RateMode::Cbr && encoders_->supports(*codec_, RateMode::Vbr);
+        rateCombo_->setCurrentIndex(rateCombo_->findData(int(vbr ? RateMode::Vbr : RateMode::Quality)));
+    }
+}
+
+void MainWindow::onRateModeChanged()
+{
+    const bool quality = rateMode() == RateMode::Quality;
+    // the bitrate starts from the one of the current estimate, so that the size stays about the same
+    if (!quality && estBps_) {
+        const QSignalBlocker blocker(bitrateSpin_);
+        bitrateSpin_->setValue(int(std::lround(*estBps_ * 8 / 1000 / 10)) * 10);
+    }
+    bitrateSpin_->setVisible(!quality);
+    settingsForm_->setRowVisible(sliderRow_, quality);
+    settingsForm_->setRowVisible(qualityLabel_, quality);
+    fitBtn_->setText(quality ? "Fit quality to limit" : "Fit bitrate to limit");
     onSettingsChanged();
 }
 
@@ -745,7 +924,7 @@ QStringList MainWindow::videoArgs() const
     // same keyframe spacing in seconds for every encoder (their defaults go from 0.4 to 10 s)
     const double outFps = fps ? fps : (m.fps > 0 ? m.fps : 30.0);
     const int gopFrames = std::max(1, int(std::nearbyint(outFps * keyint())));
-    args += codec.args(quality(), speedCombo_->currentData().toString(), std::pair{gopFrames, keyint()});
+    args += codec.args(rate(), speedCombo_->currentData().toString(), std::pair{gopFrames, keyint()});
     if (codec.family == "hevc" && (f.ext == "mp4" || f.ext == "mov"))
         args << "-tag:v" << "hvc1";   // needed by Apple players
     else if (codec.family == "mpeg4" && f.ext == "avi")
@@ -777,20 +956,28 @@ void MainWindow::onSettingsChanged()
     startBtn_->setEnabled(codec_ != nullptr);
     if (!codec_) {
         estBps_.reset();
+        spinner_->stop();
         sizeLabel_->setText("—");
         sizeDetail_->setText("⚠ No video encoder available for this format.");
         updateLimitStatus();
         return;
     }
+    if (rateMode() != RateMode::Quality) {
+        // the size follows from the bitrate: nothing to encode
+        pendingKey_.reset();
+        onEstimateDone(bitrateSpin_->value() * 1000.0 / 8, false);
+        return;
+    }
     sizeLabel_->setStyleSheet("color: gray;");
     sizeDetail_->setText("Updating estimate…");
+    spinner_->start();
     estTimer_->start();
 }
 
 // ------------------------------------------------ size estimate
 void MainWindow::runEstimate()
 {
-    if (!media_ || encoding_ || !codec_)
+    if (!media_ || encoding_ || !codec_ || rateMode() != RateMode::Quality)
         return;
     const double duration = media_->duration;
     QList<QPair<double, double>> segments;
@@ -827,15 +1014,25 @@ void MainWindow::onEstimateDone(double bps, bool exact)
     }
     estBps_ = bps;
     estExact_ = exact;
+    spinner_->stop();
     const double total = estimatedBytes();
+    const QString share = QString::number(total / double(media_->size) * 100, 'f', 0);
     sizeLabel_->setStyleSheet(QString());
     sizeLabel_->setText((exact ? "" : "≈ ") + fmtMb(total));
-    const QString accuracy = exact ? "exact estimate" : "sample-based estimate, roughly ±10%";
-    sizeDetail_->setText(QString("Video ≈ %1 kbps · audio %2 kbps · %3% of the original (%4)")
-                             .arg(bps * 8 / 1000, 0, 'f', 0)
-                             .arg(audioKbps())
-                             .arg(total / double(media_->size) * 100, 0, 'f', 0)
-                             .arg(accuracy));
+    if (rateMode() == RateMode::Quality) {
+        const QString accuracy = exact ? "exact estimate" : "sample-based estimate, roughly ±10%";
+        sizeDetail_->setText(QString("Video ≈ %1 kbps · audio %2 kbps · %3% of the original (%4)")
+                                 .arg(bps * 8 / 1000, 0, 'f', 0)
+                                 .arg(audioKbps())
+                                 .arg(share, accuracy));
+    } else {
+        const bool variable = rateMode() == RateMode::Vbr;
+        sizeDetail_->setText(QString("Video %1 kbps %2 · audio %3 kbps · %4% of the original (from the bitrate%5)")
+                                 .arg(bitrateSpin_->value())
+                                 .arg(variable ? "on average" : "constant")
+                                 .arg(audioKbps())
+                                 .arg(share, variable ? "; simple videos come out smaller" : ""));
+    }
     updateLimitStatus();
     if (fit_)
         fitStep();
@@ -847,6 +1044,7 @@ void MainWindow::onEstimateFailed(const QString &message)
     fit_.reset();
     pendingKey_.reset();
     estBps_.reset();
+    spinner_->stop();
     sizeLabel_->setStyleSheet(QString());
     sizeLabel_->setText("—");
     sizeDetail_->setText("⚠ Estimate failed: " + message);
@@ -869,16 +1067,30 @@ void MainWindow::updateLimitStatus()
 }
 
 // ------------------------------------------------ fit to limit
-// Searches for the best quality value that stays under the limit.
+// Searches for the best quality value that stays under the limit; with a bitrate, computes it.
 void MainWindow::fitToLimit()
 {
     if (!media_ || !estBps_ || !codec_)
         return;
-    const double target = limitSpin_->value() * MB * LIMIT_MARGIN;
+    // GPU encoders can end up to ~10% above an average bitrate (CBR and software encoders: a few %)
+    const double margin = rateMode() == RateMode::Vbr && codec_->hardware() ? GPU_VBR_LIMIT_MARGIN : LIMIT_MARGIN;
+    const double target = limitSpin_->value() * MB * margin;
     const double audioBytes = audioKbps() * 1000.0 / 8 * media_->duration * CONTAINER_OVERHEAD;
     if (audioBytes >= target) {
         showMessage(QMessageBox::Information, "Limit too low",
                     "The audio alone already exceeds the limit: lower or remove it.");
+        return;
+    }
+    if (rateMode() != RateMode::Quality) {
+        const double videoBytesPerSecond = (target - audioBytes) / (media_->duration * CONTAINER_OVERHEAD);
+        const int kbps = int(videoBytesPerSecond * 8 / 1000 / 10) * 10;
+        if (kbps < MIN_VIDEO_KBPS) {
+            showMessage(QMessageBox::Information, "Limit not reachable",
+                        QString("The video would need less than %1 kbps.\n"
+                                "Try reducing the resolution, frame rate or audio.").arg(MIN_VIDEO_KBPS));
+            return;
+        }
+        setBitrate(std::min(kbps, MAX_VIDEO_KBPS));
         return;
     }
     fit_ = Fit{codec_->quality.best, codec_->quality.worst, std::nullopt, {}, 8, target};
@@ -890,6 +1102,13 @@ void MainWindow::setQuality(int value)
 {
     programmatic_ = true;
     qualitySlider_->setValue(value);
+    programmatic_ = false;
+}
+
+void MainWindow::setBitrate(int kbps)
+{
+    programmatic_ = true;
+    bitrateSpin_->setValue(kbps);
     programmatic_ = false;
 }
 
@@ -980,8 +1199,10 @@ void MainWindow::start()
         return;
     }
 
+    resumeEstimate_ = spinner_->isSpinning();   // estimated again when the compression ends
     estTimer_->stop();
     estimator_->stop();
+    spinner_->stop();
     const AudioCodec *acodec = audioCodec();
     const int kbps = audioKbps();
     // put the seek index at the start of the file, so players can jump anywhere right away
@@ -1003,13 +1224,17 @@ void MainWindow::start()
     stderrTail_.clear();
     progress_->setValue(0);
     log_->clear();
+    outcomeBar_->hide();
     const QString audio = acodec ? QString("%1 %2 kbps").arg(acodec->label).arg(kbps) : QString("no audio");
     const QString speed = codec_->speeds.isEmpty() ? QString() : " · " + speedCombo_->currentText().toLower();
-    log_->appendPlainText(QString("Compressing: %1 · %2 · %3 %4 · %5 · %6 · %7%8 · keyframes every %9 s")
-                              .arg(f.label, encoderSummary(), codec_->qName)
-                              .arg(codec_->shownQuality(quality()))
-                              .arg(resCombo_->currentText(), fpsCombo_->currentText(), audio, speed)
+    const QString rateText = rateMode() == RateMode::Quality
+                                 ? QString("%1 %2").arg(codec_->qName).arg(codec_->shownQuality(quality()))
+                                 : QString("%1 %2 kbps").arg(rateModeName(rateMode())).arg(bitrateSpin_->value());
+    log_->appendPlainText(QString("Compressing: %1 · %2 · %3 · %4 · %5 · %6%7 · keyframes every %8 s")
+                              .arg(f.label, encoderSummary(), rateText, resCombo_->currentText(),
+                                   fpsCombo_->currentText(), audio, speed)
                               .arg(keyint()));
+    encodeClock_.start();
     setRunning(true);
     if (proc_)
         proc_->deleteLater();
@@ -1057,7 +1282,9 @@ void MainWindow::onFinished(int code, QProcess::ExitStatus status)
     setRunning(false);
     if (status != QProcess::NormalExit || code != 0) {
         log_->appendPlainText(stderrTail_.join('\n'));
-        showMessage(QMessageBox::Critical, "Error", "ffmpeg returned an error. See the log for details.");
+        const QString reason = stderrTail_.isEmpty() ? QString("FFmpeg could not be started.")
+                                                     : stderrTail_.last().trimmed();
+        showOutcome(Outcome::Failed, reason.toHtmlEscaped() + "<br>The log below has the details.");
         return;
     }
     progress_->setValue(100);
@@ -1067,12 +1294,76 @@ void MainWindow::onFinished(int code, QProcess::ExitStatus status)
         msg += QString("\n(estimate was %1)").arg(fmtMb(estimatedBytes()));
     log_->appendPlainText(msg);
     openBtn_->setEnabled(true);
-    if (size > limitSpin_->value() * MB)
-        showMessage(QMessageBox::Warning, "Warning",
-                    QString("The file is %1, over the %2 MB limit.\n"
-                            "Use \"Fit quality to limit\" or lower the quality a bit and try again.")
-                        .arg(fmtMb(size))
-                        .arg(limitSpin_->value(), 0, 'f', 1));
+
+    const double original = double(media_->size);
+    const QString change = size <= original
+                               ? QString("%1% smaller than the original").arg((1 - size / original) * 100, 0, 'f', 0)
+                               : QString("%1% bigger than the original").arg((size / original - 1) * 100, 0, 'f', 0);
+    // (non-breaking spaces: "3.5 MB" and "took 0:12" are never split across two lines)
+    const QString what = QString("<b>%1</b> · %2, %3 · took&nbsp;%4")
+                             .arg(QFileInfo(currentOutput_).fileName().toHtmlEscaped(),
+                                  fmtMb(size).replace(' ', "&nbsp;"), change,
+                                  fmtTime(encodeClock_.elapsed() / 1000.0));
+    if (size > limitSpin_->value() * MB) {
+        const bool quality = rateMode() == RateMode::Quality;
+        showOutcome(Outcome::OverLimit,
+                    what + QString("<br>It is over the %1 MB limit: use “%2” or lower the %3 a bit and try again.")
+                               .arg(limitSpin_->value(), 0, 'f', 1)
+                               .arg(fitBtn_->text(), quality ? "quality" : "bitrate"));
+    } else {
+        showOutcome(Outcome::Done, what);
+    }
+}
+
+// Makes the window as tall as its content, if the screen has room (it never shrinks it): otherwise the
+// content scrolls.
+void MainWindow::fitToContent()
+{
+    QWidget *content = scroll_->widget();
+    content->layout()->activate();
+    int needed = content->heightForWidth(width());   // texts that wrap need more lines in a narrow window
+    if (needed < 0)
+        needed = content->sizeHint().height();
+    const QRect room = screen()->availableGeometry();
+    const int titleBar = isVisible() ? frameGeometry().height() - height() : 40;
+    const int wanted = std::min(needed, room.height() - titleBar);
+    if (wanted <= height())
+        return;
+    resize(width(), wanted);
+    if (isVisible() && frameGeometry().bottom() > room.bottom())   // keep it all on the screen
+        move(x(), std::max(room.top(), room.bottom() - frameGeometry().height()));
+}
+
+// Shows how the compression ended in a colored box under the buttons, and draws attention to the window
+// (taskbar button on Windows, Dock icon on macOS) if it is in the background.
+void MainWindow::showOutcome(Outcome outcome, const QString &text)
+{
+    static const struct {
+        const char *title;
+        const char *color;
+        const char *rgb;
+        char symbol;
+    } looks[] = {
+        {"Compression complete", "#2e7d32", "46, 125, 50", 'v'},
+        {"Compression complete, but over the limit", "#d07a00", "232, 137, 12", '!'},
+        {"Compression failed", "#c62828", "198, 40, 40", 'x'},
+    };
+    const auto &look = looks[int(outcome)];
+    outcomeBar_->setStyleSheet(QString("#outcomeBar { background: rgba(%1, 0.13); border: 1px solid rgba(%1, 0.7); "
+                                       "border-radius: 6px; }")
+                                   .arg(look.rgb));
+    const int size = outcomeTitle_->fontMetrics().height() * 2;
+    outcomeIcon_->setPixmap(badge(QColor(look.color), look.symbol, size, devicePixelRatioF()));
+    outcomeTitle_->setText(look.title);
+    outcomeText_->setText(text);
+    playBtn_->setVisible(outcome != Outcome::Failed);
+    openBtn_->setVisible(outcome != Outcome::Failed);
+    outcomeBar_->show();
+    QTimer::singleShot(0, this, [this] {   // once the box has its size
+        fitToContent();
+        scroll_->ensureWidgetVisible(outcomeBar_);
+    });
+    QApplication::alert(this);
 }
 
 void MainWindow::cancel()
@@ -1099,6 +1390,10 @@ void MainWindow::setRunning(bool running)
         openBtn_->setEnabled(false);
     for (QWidget *w : std::initializer_list<QWidget *>{inEdit_, inBtn_, outEdit_, outBtn_, settingsBox_, limitSpin_})
         w->setEnabled(!running);
+    if (!running && resumeEstimate_) {   // the compression interrupted an estimate: finish it
+        resumeEstimate_ = false;
+        onSettingsChanged();
+    }
 }
 
 // ------------------------------------------------ updates
@@ -1121,6 +1416,10 @@ void MainWindow::onUpdateAvailable(const UpdateInfo &info)
     updateBtn_->setText(canSelfUpdate() ? "Update now" : "Download");
     updateBtn_->setEnabled(true);
     updateBar_->show();
+    QTimer::singleShot(0, this, [this] {
+        fitToContent();
+        scroll_->ensureWidgetVisible(updateBar_);
+    });
     if (manualUpdateCheck_)
         updateStatus_->clear();
     manualUpdateCheck_ = false;

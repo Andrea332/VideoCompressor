@@ -6,6 +6,7 @@
 #include "mainwindow.h"
 #include "media.h"
 #include "sizeestimator.h"
+#include "spinner.h"
 #include "updatechecker.h"
 
 #include <QApplication>
@@ -25,8 +26,12 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSlider>
+#include <QSpinBox>
+#include <QStandardItemModel>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTextDocument>
@@ -53,7 +58,12 @@ private slots:
     void writesSeekIndexAtStart();
     void estimatesAccurately_data();
     void estimatesAccurately();
+    void spinsWhileEstimating();
     void fitsToLimit();
+    void encodesAtTheChosenBitrate();
+    void fitsBitrateToLimit();
+    void showsTheOutcomeClearly();
+    void scrollsOnShortScreens();
     void notifiesAboutUpdates();
     void survivesClosingWhileBusy();
     void rendersWindow();
@@ -100,6 +110,8 @@ bool TestVideoCompressor::settled() const
     const MainWindow &w = *win_;
     if (w.estTimer_->isActive() || w.estimator_->running())
         return false;
+    if (w.rateMode() != RateMode::Quality)
+        return w.estBps_.has_value();   // computed from the bitrate, right away
     return w.sizeDetail_->text().startsWith("⚠") || w.estCache_.contains(w.videoArgs().join(QChar(0x1F)));
 }
 
@@ -219,8 +231,8 @@ void TestVideoCompressor::initTestCase()
                                       "[0:v]loop=loop=-1:size=1,trim=duration=30,setpts=N/30/TB[bg];"
                                       "[bg][1:v]overlay=x='mod(t*80,1860)':y=500",
                                       "-c:v", "libx264", "-crf", "12", path("static.mp4")});
-    for (const QString &name : {"input.mp4", "long.mp4", "20s.mp4", "rotated.mp4", "cover.mp4", "stress.mkv", "static.mp4"})
-        QVERIFY2(QFile::exists(path(name)), qPrintable(name + " was not created"));
+    for (const char *name : {"input.mp4", "long.mp4", "20s.mp4", "rotated.mp4", "cover.mp4", "stress.mkv", "static.mp4"})
+        QVERIFY2(QFile::exists(path(name)), qPrintable(QString(name) + " was not created"));
 
     win_ = std::make_unique<MainWindow>();
     win_->showMessage = [this](QMessageBox::Icon, const QString &title, const QString &) { messages_ << title; };
@@ -585,6 +597,20 @@ void TestVideoCompressor::estimatesAccurately()
     QVERIFY(std::abs(error) < 0.12);   // the README promises roughly ±10%
 }
 
+// The turning wheel is visible exactly while an estimate is on its way.
+void TestVideoCompressor::spinsWhileEstimating()
+{
+    MainWindow &w = *win_;
+    w.setInput(path("input.mp4"));   // a new video: nothing estimated yet
+    QVERIFY(w.spinner_->isSpinning() && w.spinner_->isVisible());
+    QVERIFY(QTest::qWaitFor([this] { return settled(); }, 300000));
+    QVERIFY(!w.spinner_->isSpinning() && !w.spinner_->isVisible());
+
+    select(w.rateCombo_, int(RateMode::Vbr));   // nothing to encode with a bitrate: no wheel
+    QVERIFY(!w.spinner_->isSpinning());
+    select(w.rateCombo_, int(RateMode::Quality));
+}
+
 void TestVideoCompressor::fitsToLimit()
 {
     MainWindow &w = *win_;
@@ -614,6 +640,145 @@ void TestVideoCompressor::fitsToLimit()
     QVERIFY(size > 0 && size <= 2 * MB);
 }
 
+// Every encoder offers the bitrate modes it has (a GPU's only if they work on this PC) and keeps to the
+// bitrate: the size is computed from it right away, and the file is never much bigger.
+void TestVideoCompressor::encodesAtTheChosenBitrate()
+{
+    MainWindow &w = *win_;
+    const auto *model = qobject_cast<const QStandardItemModel *>(w.rateCombo_->model());
+    constexpr int kbps = 1500;
+    w.setInput(path("20s.mp4"));
+    select(w.formatCombo_, "mkv");
+    select(w.acodecCombo_, QString());
+    select(w.keyintCombo_, 10);
+    int encodes = 0;
+    for (const VideoCodec &codec : videoCodecs()) {
+        if (!w.encoders_->available().contains(codec.encoder))
+            continue;
+        select(w.vcodecCombo_, codec.family);
+        select(w.accelCombo_, codec.hardware() ? "manual" : "off");
+        if (codec.hardware())
+            select(w.deviceCombo_, codec.vendor);
+        select(w.speedCombo_, codec.family == "vvc" ? "fast" : "balanced");   // VVenC is very slow
+        QCOMPARE(w.codec_, &codec);
+        for (RateMode mode : {RateMode::Vbr, RateMode::Cbr}) {
+            const int index = w.rateCombo_->findData(int(mode));
+            const bool offered = model->item(index)->isEnabled();
+            const QString what = codec.encoder + " " + rateModeName(mode);
+            QCOMPARE(offered, w.encoders_->supports(codec, mode));
+            if (!codec.hardware())
+                QVERIFY2(offered == codec.hasMode(mode), qPrintable(what));
+            if (!offered)
+                continue;
+            w.rateCombo_->setCurrentIndex(index);
+            w.bitrateSpin_->setValue(kbps);
+            QVERIFY2(!w.spinner_->isSpinning() && w.estBps_ && *w.estBps_ == kbps * 1000.0 / 8, qPrintable(what));
+            const double estimate = w.estimatedBytes();
+            const QString out = path("bitrate.mkv");
+            QFile::remove(out);
+            w.outEdit_->setText(out);
+            w.start();
+            QVERIFY(QTest::qWaitFor([&] { return !w.encoding_; }, 600000));
+            const QString log = w.log_->toPlainText();
+            QVERIFY2(log.contains("Done!") && log.contains(QString("%1 %2 kbps").arg(rateModeName(mode)).arg(kbps)),
+                     qPrintable(what + ": " + log.right(300)));
+            const double ratio = double(QFileInfo(out).size()) / estimate;
+            qInfo().noquote() << QString("%1 at %2 kbps: %3% of the estimate").arg(what).arg(kbps).arg(ratio * 100, 0, 'f', 1);
+            // GPU encoders can go up to ~10% over an average bitrate, the others a few %
+            QVERIFY2(ratio < 1.12, qPrintable(what));
+            // these pad a constant bitrate, so it stays constant even where the video is simple
+            const bool pads = codec.encoder == "libx264" || codec.encoder == "libx265" || codec.label == "NVENC";
+            if (mode == RateMode::Cbr && pads)
+                QVERIFY2(ratio > 0.92, qPrintable(what));
+            ++encodes;
+        }
+        select(w.rateCombo_, int(RateMode::Quality));
+    }
+    select(w.speedCombo_, "balanced");
+    qInfo() << encodes << "bitrate encodes checked";
+}
+
+void TestVideoCompressor::fitsBitrateToLimit()
+{
+    MainWindow &w = *win_;
+    messages_.clear();
+    w.setInput(path("long.mp4"));
+    select(w.formatCombo_, "mp4");
+    select(w.vcodecCombo_, "h264");
+    select(w.accelCombo_, "off");
+    select(w.acodecCombo_, "aac");
+    select(w.rateCombo_, int(RateMode::Vbr));
+    QCOMPARE(w.fitBtn_->text(), QString("Fit bitrate to limit"));
+    w.limitSpin_->setValue(3.0);
+    w.fitToLimit();
+    QVERIFY2(messages_.isEmpty(), qPrintable(messages_.join(", ")));
+    // computed, not searched: right under the margin
+    QVERIFY2(w.estimatedBytes() <= 3.0 * LIMIT_MARGIN * MB && w.estimatedBytes() > 3.0 * LIMIT_MARGIN * MB * 0.98,
+             qPrintable(fmtMb(w.estimatedBytes())));
+
+    const QString out = path("fitbitrate.mp4");
+    QFile::remove(out);
+    w.outEdit_->setText(out);
+    w.start();
+    QVERIFY(QTest::qWaitFor([&] { return !w.encoding_; }, 600000));
+    const qint64 size = QFileInfo(out).size();
+    qInfo().noquote() << "Fit to 3 MB:" << w.bitrateSpin_->value() << "kbps ->" << fmtMb(double(size));
+    QVERIFY(size > 2.5 * MB && size <= 3 * MB);
+    select(w.rateCombo_, int(RateMode::Quality));
+    w.limitSpin_->setValue(10);
+}
+
+// The end of a compression is shown in a colored box with what happened, until the next one starts.
+void TestVideoCompressor::showsTheOutcomeClearly()
+{
+    MainWindow &w = *win_;
+    QVERIFY(!compress(path("input.mp4"), "mp4", "h264", "off", {}, "aac").isEmpty());
+    QVERIFY(w.outcomeBar_->isVisible());
+    QCOMPARE(w.outcomeTitle_->text(), QString("Compression complete"));
+    QVERIFY2(w.outcomeText_->text().contains("out.mp4") && w.outcomeText_->text().contains("smaller than the original"),
+             qPrintable(w.outcomeText_->text()));
+    QVERIFY(w.playBtn_->isVisible() && w.openBtn_->isVisible() && w.openBtn_->isEnabled());
+
+    w.limitSpin_->setValue(0.5);   // the file is bigger: still done, but it says so
+    QVERIFY(!compress(path("input.mp4"), "mp4", "h264", "off", {}, "aac").isEmpty());
+    QCOMPARE(w.outcomeTitle_->text(), QString("Compression complete, but over the limit"));
+    QVERIFY2(w.outcomeText_->text().contains("over the 0.5 MB limit"), qPrintable(w.outcomeText_->text()));
+    w.limitSpin_->setValue(10);
+
+    w.setInput(path("input.mp4"));
+    QVERIFY(!w.outcomeBar_->isVisible());   // a new video: the box of the previous one goes away
+    w.outEdit_->setText(path("missing folder/out.mp4"));
+    w.start();
+    QVERIFY(QTest::qWaitFor([&] { return !w.encoding_; }, 60000));
+    QVERIFY(w.outcomeBar_->isVisible());
+    QCOMPARE(w.outcomeTitle_->text(), QString("Compression failed"));
+    QVERIFY(!w.playBtn_->isVisible() && !w.openBtn_->isVisible());
+
+    w.outEdit_->setText(path("out.mp4"));
+    w.start();
+    QVERIFY(!w.outcomeBar_->isVisible());   // hidden while the next one runs
+    w.cancel();
+    QVERIFY(!w.outcomeBar_->isVisible());
+}
+
+// The window can be shorter than what's in it (laptop screens): then it scrolls, nothing is squeezed, and
+// the box at the end of a compression is scrolled into view.
+void TestVideoCompressor::scrollsOnShortScreens()
+{
+    MainWindow &w = *win_;
+    const QSize before = w.size();
+    w.resize(w.width(), 400);
+    QCOMPARE(w.height(), 400);
+    QVERIFY(!compress(path("input.mp4"), "mp4", "h264", "off", {}, "aac").isEmpty());
+    QTest::qWait(100);
+    QVERIFY(w.scroll_->verticalScrollBar()->isVisible());
+    QVERIFY2(w.encoderLabel_->height() >= w.encoderLabel_->sizeHint().height(),
+             qPrintable(QString("%1 < %2").arg(w.encoderLabel_->height()).arg(w.encoderLabel_->sizeHint().height())));
+    const QRect box(w.outcomeBar_->mapTo(w.scroll_->viewport(), QPoint(0, 0)), w.outcomeBar_->size());
+    QVERIFY(w.scroll_->viewport()->rect().contains(box));
+    w.resize(before);
+}
+
 // No network: the version logic and GitHub's JSON are checked directly, the notice by emitting the signal.
 void TestVideoCompressor::notifiesAboutUpdates()
 {
@@ -629,16 +794,21 @@ void TestVideoCompressor::notifiesAboutUpdates()
         "html_url": "https://github.com/Andrea332/VideoCompressor/releases/tag/v9.9.10",
         "assets": [
             {"name": "VideoCompressor-9.9.10-win64.zip", "browser_download_url": "https://example.com/a.zip"},
-            {"name": "VideoCompressor-9.9.10-win64.exe", "browser_download_url": "https://example.com/setup.exe",
+            {"name": "VideoCompressor-9.9.10-win64.exe", "browser_download_url": "https://example.com/win64.exe",
              "digest": "sha256:ABCDEF0123"},
+            {"name": "VideoCompressor-9.9.10-win-arm64.exe", "browser_download_url": "https://example.com/win-arm64.exe",
+             "digest": "sha256:ABCDEF4567"},
             {"name": "VideoCompressor-9.9.10-macos-arm64.dmg", "browser_download_url": "https://example.com/a.dmg"}
         ]})";
     const auto info = UpdateChecker::parseLatestRelease(json, "9.9.9");
     QVERIFY(info);
     QCOMPARE(info->version, QString("9.9.10"));
-    QCOMPARE(info->installerName, QString("VideoCompressor-9.9.10-win64.exe"));
-    QCOMPARE(info->installerUrl, QUrl("https://example.com/setup.exe"));
-    QCOMPARE(info->installerSha256, QString("abcdef0123"));
+    // the installer for the processor this build is for (x64 or ARM64)
+    const QString platform = QString(UpdateChecker::INSTALLER_SUFFIX).chopped(4).mid(1);
+    QVERIFY(platform == "win64" || platform == "win-arm64");
+    QCOMPARE(info->installerName, "VideoCompressor-9.9.10-" + platform + ".exe");
+    QCOMPARE(info->installerUrl, QUrl("https://example.com/" + platform + ".exe"));
+    QCOMPARE(info->installerSha256, QString(platform == "win64" ? "abcdef0123" : "abcdef4567"));
     QVERIFY(!UpdateChecker::parseLatestRelease(json, "9.9.10"));
 
     MainWindow &w = *win_;
@@ -696,6 +866,9 @@ void TestVideoCompressor::rendersWindow()
     }
     QVERIFY(QTest::qWaitFor([this] { return settled(); }, 300000));
     QVERIFY(QTest::qWaitFor([&] { return w.preview_->isVisible(); }, 30000));
+    QTest::qWait(200);   // the layout adapts to the texts just set
+    w.resize(w.width(), w.scroll_->widget()->heightForWidth(w.width()));   // all of it, even on a small screen
+    QTest::qWait(200);
     const QPixmap shot = w.grab();
     QVERIFY(!shot.isNull());
     if (const QString dir = qEnvironmentVariable("VC_SCREENSHOT_DIR"); !dir.isEmpty())

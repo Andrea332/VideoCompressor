@@ -6,6 +6,11 @@
 
 #include <optional>
 
+// The processor this build is for, as in the name of its Windows installer (set by CMakeLists.txt)
+#ifndef INSTALLER_PLATFORM
+#define INSTALLER_PLATFORM "win64"
+#endif
+
 class QFile;
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -26,6 +31,8 @@ class UpdateChecker : public QObject
 public:
     static constexpr const char *LATEST_RELEASE_API =
         "https://api.github.com/repos/Andrea332/VideoCompressor/releases/latest";
+    // the installer of this build's Windows version among the files of a release (x64 or ARM64)
+    static constexpr const char *INSTALLER_SUFFIX = "-" INSTALLER_PLATFORM ".exe";
 
     explicit UpdateChecker(QObject *parent = nullptr);
 
