@@ -15,13 +15,45 @@ platforms: set the limit in MB and the app finds the best quality that fits.
   encoded whole, so the estimate is exact.
 - **Fit quality to limit**: enter a maximum size in MB and the app
   automatically searches for the highest quality that stays under it.
-- **Simple settings**: quality (CRF), resolution, frame rate, audio bitrate
-  (or no audio) and encoding speed. Only sensible options are offered for the
-  loaded video (no upscaling, no frame rate higher than the original), and
-  vertical videos are handled correctly.
+- **Many output formats and codecs**:
+
+  | Format | Video codecs | Audio codecs |
+  |--------|--------------|--------------|
+  | MP4    | H.264, H.265/HEVC, AV1, VP9, H.266/VVC, MPEG-4 (Xvid) | AAC, Opus, MP3 |
+  | MKV    | H.264, H.265/HEVC, AV1, VP9, H.266/VVC, MPEG-4 (Xvid) | AAC, Opus, MP3, Vorbis |
+  | WebM   | AV1, VP9 | Opus, Vorbis |
+  | MOV    | H.264, H.265/HEVC | AAC, MP3 |
+  | AVI    | MPEG-4 (Xvid) | MP3 |
+
+  Only combinations that work together are offered. The default, MP4 with
+  H.264 and AAC, plays almost everywhere.
+- **Hardware acceleration**: codecs that a GPU in your PC can encode are marked
+  with ⚡ (NVIDIA NVENC, AMD AMF and Intel Quick Sync, for H.264, H.265 and
+  AV1). Acceleration can be:
+  - **Automatic**: the best GPU that can encode the chosen codec (NVIDIA, then
+    Intel, then AMD), otherwise the CPU;
+  - **Manual**: you choose the GPU;
+  - **Off**: always the CPU.
+
+  The window always states which codec will be used, whether hardware
+  acceleration is on and which device (GPU or CPU, by name) does the work.
+  GPU encoding is much faster, but files are a bit larger at the same quality.
+- **Any input video**: anything FFmpeg can read, including phone videos
+  recorded in portrait, files with cover art and files with subtitles. The
+  main video and the first audio track are kept; subtitles are not copied.
+- **Simple settings**: quality, resolution, frame rate, audio codec and
+  bitrate (or no audio) and encoding speed. Only sensible options are offered
+  for the loaded video (no upscaling, no frame rate higher than the original),
+  and vertical videos are handled correctly.
+- **Smooth seeking**: every encoder places keyframes at the same, chosen
+  interval (every 10 s by default for the smallest file, or 5, 2 or 1 s for
+  faster and more precise seeking when editing or streaming). Keyframes are
+  closed-GOP (IDR) points, and the seek index is written at the start of the
+  file (MP4, MOV, MKV, WebM), so players can jump anywhere right away, even
+  over the network. Shorter intervals make the file bigger, especially for
+  videos with little motion such as screen recordings.
 - Drag and drop a video onto the window, progress bar, cancel button and a
   button to open the folder of the created file.
-- Output as **MP4 (H.264 + AAC)**, playable almost everywhere.
 - **FFmpeg included**: the packaged app needs nothing else installed.
 
 ## Using the app
@@ -88,13 +120,21 @@ launch, making startup several times slower.
 
 1. Four 4-second samples spread across the video are encoded with the chosen
    video settings.
-2. The bytes produced give the average video bitrate, to which the chosen
-   audio bitrate and about 1% for the MP4 container are added.
-3. The estimate updates automatically whenever a setting changes; results that
+2. Each sample starts with a keyframe, while the real file only has one every
+   few seconds: the size of the keyframes the samples have in excess is
+   subtracted. Without this, videos with little motion (where keyframes are
+   most of the size) would be estimated up to 50% too big.
+3. The bytes produced give the average video bitrate, to which the chosen
+   audio bitrate and about 1% for the container are added.
+4. The estimate updates automatically whenever a setting changes; results that
    were already computed are reused.
 
 For videos longer than 20 seconds the margin of error is roughly ±10%. That
 is why *Fit quality to limit* aims for 94% of the limit you set.
+
+With slow encoders the estimate takes longer, because the samples are really
+encoded: H.266/VVC can take a minute or more, while GPU encoders take a few
+seconds.
 
 ## License
 
