@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -31,10 +33,21 @@ BTBN = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"   # roll
 ARM = platform.machine().lower() in ("arm64", "aarch64")
 
 
-def fetch(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "VideoCompressor-CI"})
-    with urllib.request.urlopen(request, timeout=600) as response:
-        return response.read()
+def fetch(url, attempts=4):
+    """Downloads url, trying again a few times if the server doesn't answer (a missing file fails at once)."""
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "VideoCompressor-CI"}), timeout=600) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code < 500 or attempt == attempts:
+                raise
+            print(f"{url}: {error}, trying again", file=sys.stderr)
+        except OSError as error:   # timeouts, refused or reset connections
+            if attempt == attempts:
+                raise
+            print(f"{url}: {error}, trying again", file=sys.stderr)
+        time.sleep(15 * attempt)
 
 
 def checked(data, sha256, name):

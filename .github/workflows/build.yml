@@ -206,7 +206,8 @@ jobs:
       - name: Install Qt
         run: |
           pip install py7zr
-          echo "QT_DIR=$(python ci/install_qt.py "$QT_VERSION" "$RUNNER_TEMP/Qt")" >> "$GITHUB_ENV"
+          qt_dir=$(python ci/install_qt.py "$QT_VERSION" "$RUNNER_TEMP/Qt")   # stops here if it fails
+          echo "QT_DIR=$qt_dir" >> "$GITHUB_ENV"
 
       - name: Download FFmpeg
         run: python ci/get_ffmpeg.py ffmpeg

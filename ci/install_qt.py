@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -38,9 +40,21 @@ def repository(version):
     return f"{REPOSITORY}/linux_x64/desktop/qt6_{v}/qt6_{v}", f"qt.qt6.{v}.linux_gcc_64", "gcc_64"
 
 
-def fetch(url):
-    with urllib.request.urlopen(url, timeout=300) as response:
-        return response.read()
+def fetch(url, attempts=4):
+    """Downloads url, trying again a few times if the server doesn't answer (a missing file fails at once)."""
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=300) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code < 500 or attempt == attempts:
+                raise
+            print(f"{url}: {error}, trying again", file=sys.stderr)
+        except OSError as error:   # timeouts, refused or reset connections
+            if attempt == attempts:
+                raise
+            print(f"{url}: {error}, trying again", file=sys.stderr)
+        time.sleep(15 * attempt)
 
 
 def extract(archive, target):
