@@ -54,6 +54,7 @@ private slots:
     void estimatesAccurately();
     void fitsToLimit();
     void notifiesAboutUpdates();
+    void survivesClosingWhileBusy();
     void rendersWindow();
 
 private:
@@ -650,6 +651,20 @@ void TestVideoCompressor::notifiesAboutUpdates()
     QCOMPARE(w.updateBtn_->text(), QString("Download"));
     QTest::mouseClick(w.laterBtn_, Qt::LeftButton);
     QVERIFY(!w.updateBar_->isVisible());
+}
+
+// A window destroyed while FFmpeg is still running (preview, estimate, GPU tests) must not receive their
+// signals any more: on Linux this used to corrupt the heap at exit.
+void TestVideoCompressor::survivesClosingWhileBusy()
+{
+    for (int delayMs : {0, 300, 800}) {
+        auto window = std::make_unique<MainWindow>();
+        window->showMessage = [](QMessageBox::Icon, const QString &, const QString &) {};
+        window->setInput(path("long.mp4"));
+        QTest::qWait(delayMs);
+        QVERIFY(window->previewProc_ || window->estTimer_->isActive() || window->estimator_->running()
+                || delayMs > 0);
+    }
 }
 
 // Saves a screenshot to VC_SCREENSHOT_DIR, if set (use QT_QPA_FONTDIR=C:/Windows/Fonts to get text offscreen).

@@ -386,6 +386,21 @@ MainWindow::MainWindow(QWidget *parent)
     }
 }
 
+MainWindow::~MainWindow()
+{
+    // QWidget deletes its children before disconnecting them: stop the FFmpeg processes now, so that their
+    // "finished" signal can't reach this window while its members are being destroyed
+    estimator_->stop();
+    updater_->cancelDownload();
+    for (QProcess *proc : findChildren<QProcess *>(Qt::FindDirectChildrenOnly)) {
+        proc->disconnect(this);
+        if (proc->state() != QProcess::NotRunning) {
+            proc->kill();
+            proc->waitForFinished(3000);
+        }
+    }
+}
+
 // ------------------------------------------------ loading the video
 void MainWindow::pickInput()
 {
