@@ -68,8 +68,10 @@ private slots:
     void scrollsOnShortScreens();
     void notifiesAboutUpdates();
     void keepsPortableSettingsNextToTheApp();
-    void survivesClosingWhileBusy();
     void rendersWindow();
+    // last: it kills FFmpeg in the middle of GPU encodes, and on the macOS CI machine (a virtual Mac) the
+    // VideoToolbox encodes started after that sometimes never ended
+    void survivesClosingWhileBusy();
 
 private:
     bool usable(const QString &family) const;
