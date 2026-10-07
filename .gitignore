@@ -2,6 +2,9 @@
 build/
 dist/
 
+# FFmpeg binaries to bundle (too large for git)
+ffmpeg/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -22,25 +22,29 @@ platforms: set the limit in MB and the app finds the best quality that fits.
 - Drag and drop a video onto the window, progress bar, cancel button and a
   button to open the folder of the created file.
 - Output as **MP4 (H.264 + AAC)**, playable almost everywhere.
+- **FFmpeg included**: the packaged app needs nothing else installed.
 
-## Requirements
+## Using the app
 
-- Windows (developed and tested on Windows 11)
-- [ffmpeg](https://ffmpeg.org/) and ffprobe in your `PATH`:
+Windows only (developed and tested on Windows 11).
+
+1. Extract `video_compressor.zip`.
+2. Run `video_compressor.exe` inside the `video_compressor` folder.
+
+Keep the folder as it is: the program needs the `_internal` folder next to it.
+
+## Running from source
+
+Requirements:
+
+- Python 3.9 or later
+- the dependencies in `requirements.txt` (PySide6)
+- [FFmpeg](https://ffmpeg.org/) (`ffmpeg.exe` and `ffprobe.exe`), either in an
+  `ffmpeg/` folder inside the project or in your `PATH`:
 
   ```bash
   winget install Gyan.FFmpeg
   ```
-
-  After installing, open a new terminal (or restart the app) so the updated
-  `PATH` is picked up.
-
-To run it from source you also need:
-
-- Python 3.9 or later
-- the dependencies in `requirements.txt` (PySide6)
-
-## Running from source
 
 ```bash
 pip install -r requirements.txt
@@ -53,19 +57,32 @@ You can also pass a video as an argument to load it right away:
 python video_compressor.py "C:\path\to\video.mp4"
 ```
 
-## Building the executable
+## Building the app
 
-The Windows executable is built with [PyInstaller](https://pyinstaller.org/)
-using the included `.spec` file:
+The app is packaged with [PyInstaller](https://pyinstaller.org/) using the
+included `.spec` file:
 
 ```bash
 pip install pyinstaller
 python -m PyInstaller video_compressor.spec
 ```
 
-The file is created at `dist/video_compressor.exe`. The executable **does not
-include ffmpeg**: ffmpeg and ffprobe must be installed and in the `PATH` on the
-PC where you run it.
+This creates:
+
+- `dist/video_compressor/`: the app folder, with FFmpeg inside
+  (about 540 MB)
+- `dist/video_compressor.zip`: the same folder zipped, ready to share
+  (about 215 MB)
+
+The FFmpeg to bundle is taken from the `ffmpeg/` folder of the project
+(`ffmpeg.exe`, `ffprobe.exe` and, if present, `LICENSE` and `README.txt`). If
+that folder doesn't exist, the FFmpeg found in `PATH` is used. The
+[gyan.dev](https://www.gyan.dev/ffmpeg/builds/) *full* build is recommended:
+it is what the app is tested with and includes all FFmpeg features.
+
+The app is built as a folder rather than a single `.exe` on purpose: a
+single-file build would unpack FFmpeg (over 500 MB) to the temp folder at every
+launch, making startup several times slower.
 
 ## How the estimate works
 
@@ -81,4 +98,10 @@ is why *Fit quality to limit* aims for 94% of the limit you set.
 
 ## License
 
-Released under the MIT License. See [LICENSE](LICENSE).
+The source code of this app is released under the MIT License. See
+[LICENSE](LICENSE).
+
+The packaged app includes [FFmpeg](https://ffmpeg.org/) (gyan.dev build),
+which is licensed under the GPLv3. Its license and build information, including
+a link to the exact FFmpeg source code, are in `_internal/ffmpeg/` inside the
+app folder.

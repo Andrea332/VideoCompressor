@@ -10,7 +10,9 @@ content (screen recordings, camera footage, animations...).
 Requirements:
     - Python 3.9+
     - PySide6         ->  pip install PySide6
-    - ffmpeg/ffprobe  ->  winget install Gyan.FFmpeg   (must be in PATH)
+    - ffmpeg/ffprobe  ->  bundled in the executable; when running from source
+                          they are taken from the ffmpeg/ folder or from PATH
+                          (winget install Gyan.FFmpeg)
 
 Run:
     python video_compressor.py
@@ -50,6 +52,13 @@ FPS_STEPS = [30, 24, 15]
 
 
 # ---------------------------------------------------------------- utilities
+def find_tool(name):
+    """Prefers the FFmpeg bundled with the app (ffmpeg/ folder), otherwise uses PATH."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    bundled = os.path.join(base, "ffmpeg", name + (".exe" if sys.platform == "win32" else ""))
+    return bundled if os.path.isfile(bundled) else shutil.which(name)
+
+
 def parse_rate(text):
     try:
         num, den = text.split("/")
@@ -186,8 +195,8 @@ class MainWindow(QWidget):
         self.setAcceptDrops(True)
         self.resize(640, 720)
 
-        self.ffmpeg = shutil.which("ffmpeg")
-        self.ffprobe = shutil.which("ffprobe")
+        self.ffmpeg = find_tool("ffmpeg")
+        self.ffprobe = find_tool("ffprobe")
         self.media = None
         self.est_bps = None          # estimated bytes/s of the video track
         self.est_exact = False
@@ -334,8 +343,8 @@ class MainWindow(QWidget):
 
         self.update_crf_label()
         if not (self.ffmpeg and self.ffprobe):
-            self.src_info.setText("⚠ ffmpeg/ffprobe not found in PATH. Install them "
-                                  "(e.g. 'winget install Gyan.FFmpeg') and restart the program.")
+            self.src_info.setText("⚠ ffmpeg/ffprobe not found. Put them in the 'ffmpeg' folder "
+                                  "or install them (e.g. 'winget install Gyan.FFmpeg') and restart the program.")
             self.in_edit.setEnabled(False)
             self.in_btn.setEnabled(False)
 
