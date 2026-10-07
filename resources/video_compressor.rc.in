@@ -1,0 +1,32 @@
+// Windows resources: the icon (Explorer, taskbar and, through IDI_ICON1, Qt's windows) and the version info.
+#include <winver.h>
+
+IDI_ICON1 ICON "@CMAKE_SOURCE_DIR@/resources/icon.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "Video Compressor"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "video_compressor"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Andrea Galet. MIT License."
+            VALUE "OriginalFilename", "video_compressor.exe"
+            VALUE "ProductName", "Video Compressor"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

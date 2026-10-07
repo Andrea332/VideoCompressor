@@ -114,11 +114,26 @@ build\video_compressor.exe "C:\path\to\video.mp4"
 
 The package contains `video_compressor.exe`, only the Qt libraries and plugins
 it needs, the Microsoft C++ runtime and FFmpeg. The FFmpeg to bundle is taken
-from the `ffmpeg/` folder of the project (`ffmpeg.exe`, `ffprobe.exe` and, if
-present, `LICENSE` and `README.txt`); if that folder doesn't exist, the FFmpeg
-found in `PATH` is used. The [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)
-*full* build is recommended: it is what the app is tested with and includes
-all FFmpeg features.
+from the `ffmpeg/` folder of the project (`ffmpeg.exe`, `ffprobe.exe`, their
+DLLs and, if present, `LICENSE` and `README.txt`); if that folder doesn't
+exist, the FFmpeg found in `PATH` is used. The same FFmpeg is copied to
+`build\ffmpeg`, so the tests use exactly what gets shipped.
+
+The recommended FFmpeg is the [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)
+*full-shared* build (`ffmpeg-release-full-shared.7z`): copy `ffmpeg.exe`,
+`ffprobe.exe` and the `.dll` files from its `bin` folder, plus `LICENSE` and
+`README.txt`, into `ffmpeg/`. It has every feature of the *full* build, but
+`ffmpeg.exe` and `ffprobe.exe` share one copy of the libraries instead of
+containing one each: 230 MB instead of 424 MB.
+
+The app icon is drawn in `resources/icon.svg` (and `icon-small.svg`, a
+simplified version for 16–24 px). After editing them, regenerate
+`resources/icon.ico` (with Qt's `bin` folder in `PATH`):
+
+```powershell
+cmake --build build --target make_icon
+build\make_icon.exe resources\icon.svg resources\icon-small.svg resources\icon.ico
+```
 
 The tests (`tests/`) generate their own videos with FFmpeg and drive the real
 window offscreen: every format, codec and device combination (checking which

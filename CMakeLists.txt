@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(VideoCompressor VERSION 2.0.0 DESCRIPTION "Compress videos with a preview of the final size" LANGUAGES CXX)
+project(VideoCompressor VERSION 2.1.0 DESCRIPTION "Compress videos with a preview of the final size" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets OPTIONAL_COMPONENTS Svg)
 qt_standard_project_setup()
 
 # Everything except main(), so that the tests can use it too
@@ -26,6 +26,21 @@ endif()
 qt_add_executable(video_compressor WIN32 src/main.cpp)
 target_link_libraries(video_compressor PRIVATE vc_core)
 target_compile_definitions(video_compressor PRIVATE APP_VERSION="${PROJECT_VERSION}")
+if(WIN32)
+    configure_file(resources/video_compressor.rc.in video_compressor.rc @ONLY)   # icon and version info
+    target_sources(video_compressor PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/video_compressor.rc")
+    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/video_compressor.rc" APPEND PROPERTY
+                 OBJECT_DEPENDS "${CMAKE_SOURCE_DIR}/resources/icon.ico")
+endif()
+
+# Regenerates resources/icon.ico after editing the SVGs (not built by default):
+#   cmake --build build --target make_icon
+#   build\make_icon.exe resources\icon.svg resources\icon-small.svg resources\icon.ico
+if(TARGET Qt6::Svg)
+    qt_add_executable(make_icon tools/make_icon.cpp)
+    set_target_properties(make_icon PROPERTIES EXCLUDE_FROM_ALL TRUE WIN32_EXECUTABLE FALSE)
+    target_link_libraries(make_icon PRIVATE Qt6::Svg)
+endif()
 
 # ---------------------------------------------------------------- tests
 include(CTest)
@@ -58,13 +73,18 @@ else()
 endif()
 if(_ffmpeg_bin AND EXISTS "${_ffmpeg_bin}/ffprobe.exe")
     message(STATUS "Bundling FFmpeg from ${_ffmpeg_bin}")
-    install(PROGRAMS "${_ffmpeg_bin}/ffmpeg.exe" "${_ffmpeg_bin}/ffprobe.exe" DESTINATION ffmpeg)
+    # a "shared" build keeps its libraries in DLLs next to the exes (one copy for both)
+    file(GLOB _ffmpeg_dlls "${_ffmpeg_bin}/*.dll")
+    set(_ffmpeg_files "${_ffmpeg_bin}/ffmpeg.exe" "${_ffmpeg_bin}/ffprobe.exe" ${_ffmpeg_dlls})
     # the FFmpeg license (GPLv3) and build info must ship with the binaries
     foreach(_doc LICENSE README.txt)
         if(EXISTS "${_ffmpeg_docs}/${_doc}")
-            install(FILES "${_ffmpeg_docs}/${_doc}" DESTINATION ffmpeg)
+            list(APPEND _ffmpeg_files "${_ffmpeg_docs}/${_doc}")
         endif()
     endforeach()
+    install(FILES ${_ffmpeg_files} DESTINATION ffmpeg)
+    # same FFmpeg next to the exes in the build folder, so that tests and development runs use it too
+    file(COPY ${_ffmpeg_files} DESTINATION "${CMAKE_BINARY_DIR}/ffmpeg")
 else()
     message(WARNING "FFmpeg not found: put ffmpeg.exe and ffprobe.exe in ffmpeg/ or add them to PATH. "
                     "The package will not include FFmpeg.")

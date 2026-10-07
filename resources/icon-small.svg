@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- icon.svg simplified for 16-24 px: no sprocket holes, thicker shapes -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="#E8890C"/>
+  <rect x="62" y="68" width="132" height="120" rx="14" fill="#fff"/>
+  <path d="M108 100 L156 128 L108 156 Z" fill="#E8890C"/>
+  <g stroke="#fff" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M22 128 H44 M32 110 L48 128 L32 146"/>
+    <path d="M234 128 H212 M224 110 L208 128 L224 146"/>
+  </g>
+</svg>
