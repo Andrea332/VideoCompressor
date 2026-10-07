@@ -1,0 +1,956 @@
+#include "mainwindow.h"
+
+#include "encodercheck.h"
+#include "sizeestimator.h"
+#include "systeminfo.h"
+
+#include <QCloseEvent>
+#include <QComboBox>
+#include <QDesktopServices>
+#include <QDir>
+#include <QDoubleSpinBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFile>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QMimeData>
+#include <QPainter>
+#include <QPlainTextEdit>
+#include <QPolygonF>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QRegularExpression>
+#include <QSlider>
+#include <QTimer>
+#include <QUrl>
+#include <QVBoxLayout>
+
+#include <algorithm>
+#include <cmath>
+
+namespace {
+
+using ComboItems = QList<QPair<QString, QVariant>>;
+
+const char *const VIDEO_EXTENSIONS =
+    "mp4 m4v mkv mov qt avi webm wmv asf flv f4v ts mts m2ts m2t mpg mpeg mpe m1v m2v vob evo "
+    "3gp 3g2 mxf ogv ogm dv divx xvid rm rmvb nut y4m h264 264 h265 265 hevc ivf obu gif apng "
+    "amv mjpeg mjpg wtv dvr-ms";
+
+QString videoFilter()
+{
+    QStringList patterns;
+    for (const QString &ext : QString(VIDEO_EXTENSIONS).split(' '))
+        patterns << "*." + ext;
+    return "Videos (" + patterns.join(' ') + ");;All files (*)";
+}
+
+// Replaces the items of a combo box, keeping the current choice when it is still there (if keep).
+void fillCombo(QComboBox *combo, const ComboItems &items, bool keep = true)
+{
+    const QString current = combo->currentText();
+    const QSignalBlocker blocker(combo);
+    combo->clear();
+    for (const auto &[label, data] : items)
+        combo->addItem(label, data);
+    combo->setCurrentIndex(keep ? std::max(0, combo->findText(current)) : 0);
+}
+
+// Lightning bolt that marks codecs with hardware acceleration (transparent if color is invalid).
+QIcon boltIcon(const QColor &color = QColor())
+{
+    QPixmap pix(16, 16);
+    pix.fill(Qt::transparent);
+    if (color.isValid()) {
+        QPainter p(&pix);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(color);
+        p.drawPolygon(QPolygonF({{9.5, 0.5}, {3, 9}, {7.5, 9}, {6, 15.5}, {13, 6.5}, {8.5, 6.5}, {11, 0.5}}));
+    }
+    return QIcon(pix);
+}
+
+QString withSuffix(const QString &path, const QString &ext)
+{
+    const QString suffix = QFileInfo(path).suffix();
+    return (suffix.isEmpty() ? path + "." : path.left(path.size() - suffix.size())) + ext;
+}
+
+bool samePath(const QString &a, const QString &b)
+{
+    return QFileInfo(a).absoluteFilePath().compare(QFileInfo(b).absoluteFilePath(), Qt::CaseInsensitive) == 0;
+}
+
+QString capitalized(QString text)
+{
+    if (!text.isEmpty())
+        text[0] = text[0].toUpper();
+    return text;
+}
+
+} // namespace
+
+MainWindow::MainWindow(QWidget *parent)
+    : QWidget(parent)
+{
+    setWindowTitle("Video Compressor");
+    setAcceptDrops(true);
+    resize(640, 800);
+
+    ffmpeg_ = findTool("ffmpeg");
+    ffprobe_ = findTool("ffprobe");
+    gpus_ = gpuNames();
+    cpu_ = cpuName();
+    hwIcon_ = boltIcon(QColor("#f5a623"));
+    noIcon_ = boltIcon();
+    showMessage = [this](QMessageBox::Icon icon, const QString &title, const QString &text) {
+        QMessageBox box(icon, title, text, QMessageBox::Ok, this);
+        box.exec();
+    };
+
+    encoders_ = new EncoderCheck(ffmpeg_, this);
+    connect(encoders_, &EncoderCheck::changed, this, &MainWindow::refreshCodecs);
+    estimator_ = new SizeEstimator(ffmpeg_, ffprobe_, this);
+    connect(estimator_, &SizeEstimator::done, this, &MainWindow::onEstimateDone);
+    connect(estimator_, &SizeEstimator::failed, this, &MainWindow::onEstimateFailed);
+    estTimer_ = new QTimer(this);
+    estTimer_->setSingleShot(true);
+    estTimer_->setInterval(600);
+    connect(estTimer_, &QTimer::timeout, this, &MainWindow::runEstimate);
+
+    // --- Source ---
+    inEdit_ = new QLineEdit;
+    inEdit_->setPlaceholderText("Drop a video here or click Browse…");
+    connect(inEdit_, &QLineEdit::editingFinished, this, &MainWindow::onInputEdited);
+    inBtn_ = new QPushButton("Browse…");
+    connect(inBtn_, &QPushButton::clicked, this, &MainWindow::pickInput);
+    auto *inRow = new QHBoxLayout;
+    inRow->addWidget(inEdit_);
+    inRow->addWidget(inBtn_);
+    srcInfo_ = new QLabel("No video loaded.");
+    srcInfo_->setWordWrap(true);
+    auto *srcBox = new QGroupBox("Source video");
+    auto *srcLayout = new QVBoxLayout(srcBox);
+    srcLayout->addLayout(inRow);
+    srcLayout->addWidget(srcInfo_);
+
+    // --- Settings ---
+    formatCombo_ = new QComboBox;
+    for (const Format &f : formats())
+        formatCombo_->addItem(f.label, f.ext);
+    vcodecCombo_ = new QComboBox;
+    vcodecCombo_->setToolTip("⚡ = this PC has a GPU that can encode the codec (hardware acceleration)");
+    accelCombo_ = new QComboBox;
+    accelCombo_->addItem("Automatic", "auto");
+    accelCombo_->addItem("Manual", "manual");
+    accelCombo_->addItem("Off (software, CPU)", "off");
+    accelCombo_->setToolTip("Automatic: the best GPU that can encode the chosen codec, otherwise the CPU.\n"
+                            "Manual: choose the GPU yourself.\n"
+                            "Off: always encode on the CPU (slower, but smaller files at the same quality).");
+    deviceCombo_ = new QComboBox;
+    auto *accelRow = new QHBoxLayout;
+    accelRow->addWidget(accelCombo_);
+    accelRow->addWidget(deviceCombo_, 1);
+    encoderLabel_ = new QLabel;   // always states codec, hardware acceleration and device
+    encoderLabel_->setWordWrap(true);
+
+    qualitySlider_ = new QSlider(Qt::Horizontal);
+    qualitySlider_->setInvertedAppearance(true);   // right = higher quality
+    qualitySlider_->setInvertedControls(true);
+    qualityLabel_ = new QLabel;
+    auto *sliderRow = new QHBoxLayout;
+    sliderRow->addWidget(new QLabel("Smaller file"));
+    sliderRow->addWidget(qualitySlider_, 1);
+    sliderRow->addWidget(new QLabel("Higher quality"));
+
+    resCombo_ = new QComboBox;
+    fpsCombo_ = new QComboBox;
+    acodecCombo_ = new QComboBox;
+    abitrateCombo_ = new QComboBox;
+    for (int kbps : audioBitrates())
+        abitrateCombo_->addItem(QString("%1 kbps").arg(kbps), kbps);
+    abitrateCombo_->setCurrentIndex(abitrateCombo_->findData(DEFAULT_AUDIO_KBPS));
+    auto *audioRow = new QHBoxLayout;
+    audioRow->addWidget(acodecCombo_, 1);
+    audioRow->addWidget(abitrateCombo_);
+    speedCombo_ = new QComboBox;
+    for (const SpeedLevel &s : speedLevels())
+        speedCombo_->addItem(s.label, s.key);
+    keyintCombo_ = new QComboBox;
+    for (const KeyframeInterval &k : keyframeIntervals())
+        keyintCombo_->addItem(k.label, k.seconds);
+    keyintCombo_->setToolTip(
+        "Keyframes are the points where playback can start when you jump in the video.\n"
+        "More frequent keyframes give faster, more precise seeking (useful for editing\n"
+        "and streaming) but a bigger file, especially for videos with little motion.");
+
+    auto *form = new QFormLayout;
+    form->addRow("Format:", formatCombo_);
+    form->addRow("Video codec:", vcodecCombo_);
+    form->addRow("Hardware acceleration:", accelRow);
+    form->addRow("", encoderLabel_);
+    form->addRow("Quality:", sliderRow);
+    form->addRow("", qualityLabel_);
+    form->addRow("Resolution:", resCombo_);
+    form->addRow("Frame rate:", fpsCombo_);
+    form->addRow("Audio:", audioRow);
+    form->addRow("Speed:", speedCombo_);
+    form->addRow("Keyframes:", keyintCombo_);
+    settingsBox_ = new QGroupBox("Settings");
+    settingsBox_->setLayout(form);
+    settingsBox_->setEnabled(false);
+
+    connect(formatCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onFormatChanged);
+    for (QComboBox *combo : {vcodecCombo_, accelCombo_, deviceCombo_})
+        connect(combo, &QComboBox::currentIndexChanged, this, &MainWindow::updateEncoder);
+    connect(acodecCombo_, &QComboBox::currentIndexChanged, this, &MainWindow::onAudioCodecChanged);
+    connect(qualitySlider_, &QSlider::valueChanged, this, &MainWindow::onSettingsChanged);
+    for (QComboBox *combo : {resCombo_, fpsCombo_, abitrateCombo_, speedCombo_, keyintCombo_})
+        connect(combo, &QComboBox::currentIndexChanged, this, &MainWindow::onSettingsChanged);
+
+    // --- Size preview ---
+    sizeLabel_ = new QLabel("—");
+    QFont font = sizeLabel_->font();
+    font.setPointSize(font.pointSize() + 10);
+    font.setBold(true);
+    sizeLabel_->setFont(font);
+    sizeDetail_ = new QLabel("Load a video to see the estimate.");
+    sizeDetail_->setWordWrap(true);
+
+    limitSpin_ = new QDoubleSpinBox;
+    limitSpin_->setRange(0.5, 4000);
+    limitSpin_->setDecimals(1);
+    limitSpin_->setValue(10);
+    limitSpin_->setSuffix(" MB");
+    connect(limitSpin_, &QDoubleSpinBox::valueChanged, this, &MainWindow::updateLimitStatus);
+    limitStatus_ = new QLabel;
+    fitBtn_ = new QPushButton("Fit quality to limit");
+    fitBtn_->setEnabled(false);
+    connect(fitBtn_, &QPushButton::clicked, this, &MainWindow::fitToLimit);
+    auto *limitRow = new QHBoxLayout;
+    limitRow->addWidget(new QLabel("Limit:"));
+    limitRow->addWidget(limitSpin_);
+    limitRow->addWidget(limitStatus_, 1);
+    limitRow->addWidget(fitBtn_);
+
+    auto *previewBox = new QGroupBox("Estimated output size");
+    auto *previewLayout = new QVBoxLayout(previewBox);
+    previewLayout->addWidget(sizeLabel_);
+    previewLayout->addWidget(sizeDetail_);
+    previewLayout->addLayout(limitRow);
+
+    // --- Output and start ---
+    outEdit_ = new QLineEdit;
+    outBtn_ = new QPushButton("Browse…");
+    connect(outBtn_, &QPushButton::clicked, this, &MainWindow::pickOutput);
+    auto *outRow = new QHBoxLayout;
+    outRow->addWidget(new QLabel("Save as:"));
+    outRow->addWidget(outEdit_);
+    outRow->addWidget(outBtn_);
+
+    progress_ = new QProgressBar;
+    progress_->setRange(0, 100);
+    startBtn_ = new QPushButton("Compress");
+    startBtn_->setEnabled(false);
+    connect(startBtn_, &QPushButton::clicked, this, &MainWindow::start);
+    cancelBtn_ = new QPushButton("Cancel");
+    cancelBtn_->setEnabled(false);
+    connect(cancelBtn_, &QPushButton::clicked, this, &MainWindow::cancel);
+    openBtn_ = new QPushButton("Open folder");
+    openBtn_->setEnabled(false);
+    connect(openBtn_, &QPushButton::clicked, this, &MainWindow::openFolder);
+    auto *btnRow = new QHBoxLayout;
+    btnRow->addWidget(startBtn_);
+    btnRow->addWidget(cancelBtn_);
+    btnRow->addStretch();
+    btnRow->addWidget(openBtn_);
+
+    log_ = new QPlainTextEdit;
+    log_->setReadOnly(true);
+    log_->setMaximumBlockCount(500);
+    log_->setMaximumHeight(110);
+
+    auto *layout = new QVBoxLayout(this);
+    layout->addWidget(srcBox);
+    layout->addWidget(settingsBox_);
+    layout->addWidget(previewBox);
+    layout->addLayout(outRow);
+    layout->addWidget(progress_);
+    layout->addLayout(btnRow);
+    layout->addWidget(log_);
+
+    refreshCodecs();
+    if (ffmpeg_.isEmpty() || ffprobe_.isEmpty()) {
+        srcInfo_->setText("⚠ ffmpeg/ffprobe not found. Put them in the 'ffmpeg' folder "
+                          "or install them (e.g. 'winget install Gyan.FFmpeg') and restart the program.");
+        inEdit_->setEnabled(false);
+        inBtn_->setEnabled(false);
+    }
+}
+
+// ------------------------------------------------ loading the video
+void MainWindow::pickInput()
+{
+    const QString path = QFileDialog::getOpenFileName(this, "Choose a video", QString(), videoFilter());
+    if (!path.isEmpty())
+        setInput(QDir::toNativeSeparators(path));
+}
+
+void MainWindow::onInputEdited()
+{
+    QString path = inEdit_->text().trimmed();
+    if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
+        path = path.mid(1, path.size() - 2);
+    if (!path.isEmpty() && (!media_ || !samePath(path, media_->path)))
+        setInput(path);
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->mimeData()->hasUrls() && !encoding_)
+        event->acceptProposedAction();
+}
+
+void MainWindow::dropEvent(QDropEvent *event)
+{
+    const QList<QUrl> urls = event->mimeData()->urls();
+    if (!urls.isEmpty())
+        setInput(QDir::toNativeSeparators(urls.first().toLocalFile()));
+}
+
+void MainWindow::setInput(const QString &path)
+{
+    if (path.isEmpty() || ffprobe_.isEmpty() || encoding_)
+        return;
+    inEdit_->setText(path);
+    estimator_->stop();
+    QString error;
+    const std::optional<MediaInfo> media = probe(ffprobe_, path, &error);
+    if (!media) {
+        media_.reset();
+        settingsBox_->setEnabled(false);
+        startBtn_->setEnabled(false);
+        fitBtn_->setEnabled(false);
+        srcInfo_->setText("⚠ Could not read the video: " + error);
+        return;
+    }
+
+    media_ = media;
+    estBps_.reset();
+    estCache_.clear();
+    fit_.reset();
+    const MediaInfo &m = *media_;
+    const QFileInfo file(path);
+    outEdit_->setText(QDir::toNativeSeparators(file.path() + "/" + file.completeBaseName() + "_compressed." + fmt().ext));
+    srcInfo_->setText(QString("Duration %1 · %2×%3 · %4 fps · audio %5 · %6")
+                          .arg(fmtTime(m.duration))
+                          .arg(m.width)
+                          .arg(m.height)
+                          .arg(m.fps, 0, 'f', 0)
+                          .arg(m.hasAudio ? "yes" : "no")
+                          .arg(fmtMb(double(m.size))));
+
+    // The options offered depend on the video: no upscaling and no higher fps
+    const int shortSide = std::min(m.width, m.height);
+    programmatic_ = true;
+    resCombo_->clear();
+    resCombo_->addItem(QString("Original (%1p)").arg(shortSide), 0);
+    for (int r : resolutionSteps())
+        if (r < shortSide)
+            resCombo_->addItem(QString("%1p").arg(r), r);
+    fpsCombo_->clear();
+    fpsCombo_->addItem(QString("Original (%1 fps)").arg(m.fps, 0, 'f', 0), 0);
+    for (int f : fpsSteps())
+        if (f < m.fps - 0.5)
+            fpsCombo_->addItem(QString("%1 fps").arg(f), f);
+    programmatic_ = false;
+    updateAudioWidgets();
+
+    settingsBox_->setEnabled(true);
+    openBtn_->setEnabled(false);
+    onSettingsChanged();
+}
+
+// ------------------------------------------------ settings
+const Format &MainWindow::fmt() const
+{
+    return formatByExt(formatCombo_->currentData().toString());
+}
+
+int MainWindow::quality() const
+{
+    return qualitySlider_->value();
+}
+
+int MainWindow::keyint() const
+{
+    return keyintCombo_->currentData().toInt();
+}
+
+const AudioCodec *MainWindow::audioCodec() const
+{
+    if (!media_ || !media_->hasAudio)
+        return nullptr;
+    return audioCodecByName(acodecCombo_->currentData().toString());
+}
+
+int MainWindow::audioKbps() const
+{
+    return audioCodec() ? abitrateCombo_->currentData().toInt() : 0;
+}
+
+// GPU encoders for a codec that work on this PC, best first.
+std::vector<const VideoCodec *> MainWindow::hwEncoders(const QString &family) const
+{
+    std::vector<const VideoCodec *> list;
+    for (const VideoCodec &c : videoCodecs())
+        if (c.family == family && c.hardware() && encoders_->available().contains(c.encoder))
+            list.push_back(&c);
+    std::stable_sort(list.begin(), list.end(),
+                     [](const VideoCodec *a, const VideoCodec *b) { return vendorRank(a->vendor) < vendorRank(b->vendor); });
+    return list;
+}
+
+QString MainWindow::deviceName(const QString &vendor) const
+{
+    const Vendor *v = vendorByKey(vendor);
+    return gpus_.value(vendor, v ? v->genericName : vendor);
+}
+
+// Offers only the codecs that the chosen format accepts and this PC can encode.
+void MainWindow::refreshCodecs()
+{
+    const Format &f = fmt();
+    const QSet<QString> &available = encoders_->available();
+    const QString prevAudio = acodecCombo_->currentData().toString();
+    programmatic_ = true;
+
+    ComboItems familyItems;
+    QStringList familyKeys;
+    for (const Family &family : families()) {
+        const bool usable = std::any_of(videoCodecs().begin(), videoCodecs().end(), [&](const VideoCodec &c) {
+            return c.family == family.key && available.contains(c.encoder);
+        });
+        if (!f.video.contains(family.key) || !usable)
+            continue;
+        familyItems.append({family.note.isEmpty() ? family.name : family.name + " (" + family.note + ")", family.key});
+        familyKeys << family.key;
+    }
+    fillCombo(vcodecCombo_, familyItems);
+    for (int i = 0; i < familyKeys.size(); ++i) {
+        QStringList gpus;
+        for (const VideoCodec *c : hwEncoders(familyKeys[i]))
+            gpus << deviceName(c->vendor);
+        vcodecCombo_->setItemIcon(i, gpus.isEmpty() ? noIcon_ : hwIcon_);
+        vcodecCombo_->setItemData(i, gpus.isEmpty() ? QString("Software encoding only (CPU)")
+                                                    : "Hardware acceleration available on: " + gpus.join(", "),
+                                  Qt::ToolTipRole);
+    }
+
+    ComboItems audioItems;
+    for (const AudioCodec &a : audioCodecs())
+        if (f.audio.contains(a.name) && available.contains(a.encoder))
+            audioItems.append({a.label, a.name});
+    audioItems.append({"No audio", QString()});
+    fillCombo(acodecCombo_, audioItems);
+
+    updateEncoder();
+    if (acodecCombo_->currentData().toString() != prevAudio)
+        onAudioCodecChanged();
+    programmatic_ = false;
+}
+
+// Picks the encoder from codec, acceleration mode and device, and states clearly what will be used.
+void MainWindow::updateEncoder()
+{
+    const QString family = vcodecCombo_->currentData().toString();
+    const QString mode = accelCombo_->currentData().toString();
+    std::vector<const VideoCodec *> hardware;
+    if (mode != "off")
+        hardware = hwEncoders(family);
+    const VideoCodec *software = nullptr;
+    for (const VideoCodec &c : videoCodecs())
+        if (c.family == family && !c.hardware() && encoders_->available().contains(c.encoder)) {
+            software = &c;
+            break;
+        }
+
+    // the device menu always shows what will be used, but can be changed only in manual mode
+    ComboItems devices;
+    for (const VideoCodec *c : hardware)
+        devices.append({deviceName(c->vendor) + " (" + c->label + ")", c->vendor});
+    if (devices.isEmpty())
+        devices.append({"CPU: " + cpu_, QString()});
+    fillCombo(deviceCombo_, devices, mode == "manual");
+    deviceCombo_->setEnabled(mode == "manual" && !hardware.empty());
+    const QString vendor = deviceCombo_->currentData().toString();
+    const VideoCodec *codec = software;
+    for (const VideoCodec *c : hardware)
+        if (c->vendor == vendor) {
+            codec = c;
+            break;
+        }
+
+    const QString name = familyName(family).toHtmlEscaped();
+    QString text;
+    if (!codec) {
+        text = QString("⚠ No %1encoder for <b>%2</b> on this PC.").arg(mode == "off" ? "software " : "", name);
+    } else {
+        QString accel, device;
+        if (codec->hardware()) {
+            accel = "<b>yes</b>";
+            device = "<b>" + deviceName(codec->vendor).toHtmlEscaped() + "</b>";
+        } else {
+            const QString why = mode == "off" ? QString() : " (no GPU in this PC can encode " + name + ")";
+            accel = "<b>no</b>" + why;
+            device = "<b>CPU</b> " + cpu_.toHtmlEscaped();
+        }
+        const QList<QPair<QString, QString>> rows = {{"Codec:", "<b>" + name + "</b>"},
+                                                     {"Hardware acceleration:", accel},
+                                                     {"Device:", device},
+                                                     {"Encoder:", codec->label.toHtmlEscaped()}};
+        text = "<table cellspacing='0' cellpadding='1'>";
+        for (const auto &[label, value] : rows)
+            text += "<tr><td>" + label + "&nbsp;&nbsp;</td><td>" + value + "</td></tr>";
+        text += "</table>";
+    }
+    encoderLabel_->setText(text);
+    setCodec(codec);
+}
+
+// Plain-text version of the encoder summary, for the log.
+QString MainWindow::encoderSummary() const
+{
+    const QString device = codec_->hardware() ? deviceName(codec_->vendor) + ", hardware" : QString("CPU, software");
+    return QString("%1 (%2 on %3)").arg(familyName(codec_->family), codec_->label, device);
+}
+
+void MainWindow::onFormatChanged()
+{
+    const QString out = outEdit_->text().trimmed();
+    if (!out.isEmpty()) {
+        const QString suffix = QFileInfo(out).suffix().toLower();
+        if (std::any_of(formats().begin(), formats().end(), [&](const Format &f) { return f.ext == suffix; }))
+            outEdit_->setText(withSuffix(out, fmt().ext));
+    }
+    refreshCodecs();
+    onSettingsChanged();   // the format can change the video args (e.g. the HEVC tag)
+}
+
+void MainWindow::setCodec(const VideoCodec *codec)
+{
+    if (codec == codec_)
+        return;
+    codec_ = codec;
+    if (codec) {
+        const QSignalBlocker blocker(qualitySlider_);
+        qualitySlider_->setRange(codec->quality.best, codec->quality.worst);
+        qualitySlider_->setValue(codec->quality.def);
+        speedCombo_->setEnabled(!codec->speeds.isEmpty());
+    }
+    onSettingsChanged();
+}
+
+void MainWindow::onAudioCodecChanged()
+{
+    updateAudioWidgets();
+    onSettingsChanged();
+}
+
+void MainWindow::updateAudioWidgets()
+{
+    const bool hasAudio = media_ && media_->hasAudio;
+    acodecCombo_->setEnabled(hasAudio);
+    abitrateCombo_->setEnabled(hasAudio && !acodecCombo_->currentData().toString().isEmpty());
+}
+
+QStringList MainWindow::videoArgs() const
+{
+    const MediaInfo &m = *media_;
+    const VideoCodec &codec = *codec_;
+    const Format &f = fmt();
+    QStringList filters;
+    const int target = resCombo_->currentData().toInt();
+    if (target)   // scale the short side, so it also works with vertical videos
+        filters << (m.width >= m.height ? QString("scale=-2:%1").arg(target) : QString("scale=%1:-2").arg(target));
+    else if (m.width % 2 || m.height % 2)
+        filters << "scale=trunc(iw/2)*2:trunc(ih/2)*2";   // 4:2:0 video needs even dimensions
+    const int fps = fpsCombo_->currentData().toInt();
+    if (fps)
+        filters << QString("fps=%1").arg(fps);
+    QStringList args{"-map", QString("0:%1").arg(m.videoIndex)};
+    if (!filters.isEmpty())
+        args << "-vf" << filters.join(',');
+    // same keyframe spacing in seconds for every encoder (their defaults go from 0.4 to 10 s)
+    const double outFps = fps ? fps : (m.fps > 0 ? m.fps : 30.0);
+    const int gopFrames = std::max(1, int(std::nearbyint(outFps * keyint())));
+    args += codec.args(quality(), speedCombo_->currentData().toString(), std::pair{gopFrames, keyint()});
+    if (codec.family == "hevc" && (f.ext == "mp4" || f.ext == "mov"))
+        args << "-tag:v" << "hvc1";   // needed by Apple players
+    else if (codec.family == "mpeg4" && f.ext == "avi")
+        args << "-tag:v" << "XVID";   // recognized by old players
+    return args;
+}
+
+void MainWindow::updateQualityLabel()
+{
+    if (!codec_) {
+        qualityLabel_->clear();
+        return;
+    }
+    qualityLabel_->setText(QString("%1 quality (%2 %3)")
+                               .arg(capitalized(qualityName(quality(), codec_->quality)), codec_->qName)
+                               .arg(quality()));
+}
+
+void MainWindow::onSettingsChanged()
+{
+    if (!programmatic_)
+        fit_.reset();   // a manual change interrupts the search
+    updateQualityLabel();
+    if (!media_ || encoding_)
+        return;
+    estimator_->stop();
+    estTimer_->stop();
+    fitBtn_->setEnabled(false);
+    startBtn_->setEnabled(codec_ != nullptr);
+    if (!codec_) {
+        estBps_.reset();
+        sizeLabel_->setText("—");
+        sizeDetail_->setText("⚠ No video encoder available for this format.");
+        updateLimitStatus();
+        return;
+    }
+    sizeLabel_->setStyleSheet("color: gray;");
+    sizeDetail_->setText("Updating estimate…");
+    estTimer_->start();
+}
+
+// ------------------------------------------------ size estimate
+void MainWindow::runEstimate()
+{
+    if (!media_ || encoding_ || !codec_)
+        return;
+    const double duration = media_->duration;
+    QList<QPair<double, double>> segments;
+    if (duration <= WHOLE_IF_SHORTER) {
+        segments.append({0.0, duration});
+    } else {
+        for (int i = 0; i < SAMPLE_COUNT; ++i)
+            segments.append({std::max(0.0, duration * (i + 0.5) / SAMPLE_COUNT - SAMPLE_LEN / 2), SAMPLE_LEN});
+    }
+    const QStringList args = videoArgs();
+    const QString key = args.join(QChar(0x1F));
+    if (estCache_.contains(key)) {
+        pendingKey_.reset();
+        const auto [bps, exact] = estCache_.value(key);
+        onEstimateDone(bps, exact);
+        return;
+    }
+    pendingKey_ = key;
+    sizeDetail_->setText(fit_ ? "Searching for the best quality under the limit…"
+                              : "Estimating (encoding a few short samples)…");
+    estimator_->start(media_->path, segments, args, fmt().ext, keyint());
+}
+
+double MainWindow::estimatedBytes() const
+{
+    return (estBps_.value_or(0) + audioKbps() * 1000.0 / 8) * media_->duration * CONTAINER_OVERHEAD;
+}
+
+void MainWindow::onEstimateDone(double bps, bool exact)
+{
+    if (pendingKey_) {
+        estCache_.insert(*pendingKey_, {bps, exact});
+        pendingKey_.reset();
+    }
+    estBps_ = bps;
+    estExact_ = exact;
+    const double total = estimatedBytes();
+    sizeLabel_->setStyleSheet(QString());
+    sizeLabel_->setText((exact ? "" : "≈ ") + fmtMb(total));
+    const QString accuracy = exact ? "exact estimate" : "sample-based estimate, roughly ±10%";
+    sizeDetail_->setText(QString("Video ≈ %1 kbps · audio %2 kbps · %3% of the original (%4)")
+                             .arg(bps * 8 / 1000, 0, 'f', 0)
+                             .arg(audioKbps())
+                             .arg(total / double(media_->size) * 100, 0, 'f', 0)
+                             .arg(accuracy));
+    updateLimitStatus();
+    if (fit_)
+        fitStep();
+    fitBtn_->setEnabled(!fit_);
+}
+
+void MainWindow::onEstimateFailed(const QString &message)
+{
+    fit_.reset();
+    pendingKey_.reset();
+    estBps_.reset();
+    sizeLabel_->setStyleSheet(QString());
+    sizeLabel_->setText("—");
+    sizeDetail_->setText("⚠ Estimate failed: " + message);
+    updateLimitStatus();
+}
+
+void MainWindow::updateLimitStatus()
+{
+    if (!media_ || !estBps_) {
+        limitStatus_->clear();
+        return;
+    }
+    if (estimatedBytes() <= limitSpin_->value() * MB) {
+        limitStatus_->setText("✔ Under the limit");
+        limitStatus_->setStyleSheet("color: #2e7d32; font-weight: bold;");
+    } else {
+        limitStatus_->setText("✖ Over the limit");
+        limitStatus_->setStyleSheet("color: #c62828; font-weight: bold;");
+    }
+}
+
+// ------------------------------------------------ fit to limit
+// Searches for the best quality value that stays under the limit.
+void MainWindow::fitToLimit()
+{
+    if (!media_ || !estBps_ || !codec_)
+        return;
+    const double target = limitSpin_->value() * MB * LIMIT_MARGIN;
+    const double audioBytes = audioKbps() * 1000.0 / 8 * media_->duration * CONTAINER_OVERHEAD;
+    if (audioBytes >= target) {
+        showMessage(QMessageBox::Information, "Limit too low",
+                    "The audio alone already exceeds the limit: lower or remove it.");
+        return;
+    }
+    fit_ = Fit{codec_->quality.best, codec_->quality.worst, std::nullopt, {}, 8, target};
+    fitBtn_->setEnabled(false);
+    fitStep();
+}
+
+void MainWindow::setQuality(int value)
+{
+    programmatic_ = true;
+    qualitySlider_->setValue(value);
+    programmatic_ = false;
+}
+
+void MainWindow::fitStep()
+{
+    Fit &f = *fit_;
+    const int worst = codec_->quality.worst;
+    const int q = quality();
+    const double size = estimatedBytes();
+    f.points.emplace_back(q, size);
+    if (size <= f.target) {
+        f.best = f.best ? std::min(*f.best, q) : q;
+        f.hi = std::min(f.hi, q - 1);   // try a higher quality
+    } else {
+        f.lo = std::max(f.lo, q + 1);   // needs more compression
+    }
+    --f.left;
+
+    if (f.lo > f.hi || f.left <= 0) {
+        const Fit result = f;
+        fit_.reset();
+        if (result.best) {
+            if (*result.best != q)
+                setQuality(*result.best);
+        } else if (result.lo > worst) {
+            showMessage(QMessageBox::Information, "Limit not reachable",
+                        "Even at the lowest quality the file exceeds the limit.\n"
+                        "Try reducing the resolution, frame rate or audio.");
+        } else {
+            setQuality(std::min(result.lo, worst));
+        }
+        return;
+    }
+
+    // guess the next value: size drops roughly exponentially as the quality value grows
+    double slope = -std::log(2.0) / codec_->halving;
+    if (f.points.size() >= 2) {
+        const auto [q1, s1] = f.points[f.points.size() - 2];
+        const auto [q2, s2] = f.points.back();
+        if (q1 != q2 && s1 > 0 && s2 > 0) {
+            const double measured = (std::log(s2) - std::log(s1)) / (q2 - q1);
+            if (measured < 0)
+                slope = measured;
+        }
+    }
+    const int next = int(std::nearbyint(q + (std::log(f.target) - std::log(size)) / slope));
+    setQuality(std::max(f.lo, std::min(f.hi, next)));
+}
+
+// ------------------------------------------------ output
+void MainWindow::pickOutput()
+{
+    const Format &f = fmt();
+    QString path = QFileDialog::getSaveFileName(this, "Save as", outEdit_->text(), QString("%1 (*.%2)").arg(f.label, f.ext));
+    if (path.isEmpty())
+        return;
+    if (!path.endsWith("." + f.ext, Qt::CaseInsensitive))
+        path += "." + f.ext;
+    outEdit_->setText(QDir::toNativeSeparators(path));
+}
+
+void MainWindow::openFolder()
+{
+    if (!currentOutput_.isEmpty())
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(currentOutput_).absolutePath()));
+}
+
+// ------------------------------------------------ compression
+void MainWindow::start()
+{
+    if (!media_ || !codec_)
+        return;
+    const Format &f = fmt();
+    const QString input = media_->path;
+    QString out = outEdit_->text().trimmed();
+    if (out.size() >= 2 && out.startsWith('"') && out.endsWith('"'))
+        out = out.mid(1, out.size() - 2);
+    if (out.isEmpty()) {
+        showMessage(QMessageBox::Warning, "Error", "Choose where to save the file.");
+        return;
+    }
+    if (QFileInfo(out).suffix().toLower() != f.ext) {
+        out = withSuffix(out, f.ext);
+        outEdit_->setText(out);
+    }
+    if (samePath(input, out)) {
+        showMessage(QMessageBox::Warning, "Error", "The output file must be different from the input file.");
+        return;
+    }
+
+    estTimer_->stop();
+    estimator_->stop();
+    const AudioCodec *acodec = audioCodec();
+    const int kbps = audioKbps();
+    // put the seek index at the start of the file, so players can jump anywhere right away
+    // (also when the file is streamed or opened over the network)
+    QStringList index;
+    if (f.ext == "mp4" || f.ext == "mov")
+        index = {"-movflags", "+faststart"};
+    else if (f.ext == "mkv" || f.ext == "webm")
+        index = {"-cues_to_front", "1"};
+    QStringList args{"-y", "-hide_banner", "-nostats", "-progress", "pipe:1", "-i", input};
+    args += videoArgs();
+    args += acodec ? QStringList{"-map", "0:a:0"} + acodec->args(kbps) : QStringList{"-an"};
+    args += index;
+    args << out;
+
+    cancelled_ = false;
+    currentOutput_ = out;
+    outBuf_.clear();
+    stderrTail_.clear();
+    progress_->setValue(0);
+    log_->clear();
+    const QString audio = acodec ? QString("%1 %2 kbps").arg(acodec->label).arg(kbps) : QString("no audio");
+    const QString speed = codec_->speeds.isEmpty() ? QString() : " · " + speedCombo_->currentText().toLower();
+    log_->appendPlainText(QString("Compressing: %1 · %2 · %3 %4 · %5 · %6 · %7%8 · keyframes every %9 s")
+                              .arg(f.label, encoderSummary(), codec_->qName)
+                              .arg(quality())
+                              .arg(resCombo_->currentText(), fpsCombo_->currentText(), audio, speed)
+                              .arg(keyint()));
+    setRunning(true);
+    if (proc_)
+        proc_->deleteLater();
+    proc_ = new QProcess(this);
+    connect(proc_, &QProcess::readyReadStandardOutput, this, &MainWindow::onStdout);
+    connect(proc_, &QProcess::readyReadStandardError, this, &MainWindow::onStderr);
+    connect(proc_, &QProcess::finished, this, &MainWindow::onFinished);
+    connect(proc_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart)
+            onFinished(-1, QProcess::CrashExit);
+    });
+    proc_->start(ffmpeg_, args);
+}
+
+void MainWindow::onStdout()
+{
+    outBuf_ += QString::fromUtf8(proc_->readAllStandardOutput());
+    QStringList lines = outBuf_.split('\n');
+    outBuf_ = lines.takeLast();
+    for (QString line : lines) {
+        line = line.trimmed();
+        if (!line.startsWith("out_time_us=") && !line.startsWith("out_time_ms="))
+            continue;
+        bool ok = false;
+        const qint64 value = line.section('=', 1).toLongLong(&ok);
+        if (ok && value >= 0) {
+            const double frac = std::min(value / 1e6 / media_->duration, 1.0);
+            progress_->setValue(int(frac * 100));
+        }
+    }
+}
+
+void MainWindow::onStderr()
+{
+    stderrTail_ += QString::fromUtf8(proc_->readAllStandardError()).split(QRegularExpression("\r?\n|\r"),
+                                                                          Qt::SkipEmptyParts);
+    if (stderrTail_.size() > 30)
+        stderrTail_ = stderrTail_.mid(stderrTail_.size() - 30);
+}
+
+void MainWindow::onFinished(int code, QProcess::ExitStatus status)
+{
+    if (cancelled_)
+        return;
+    setRunning(false);
+    if (status != QProcess::NormalExit || code != 0) {
+        log_->appendPlainText(stderrTail_.join('\n'));
+        showMessage(QMessageBox::Critical, "Error", "ffmpeg returned an error. See the log for details.");
+        return;
+    }
+    progress_->setValue(100);
+    const double size = double(QFileInfo(currentOutput_).size());
+    QString msg = QString("Done! %1 → %2").arg(fmtMb(size), currentOutput_);
+    if (estBps_)
+        msg += QString("\n(estimate was %1)").arg(fmtMb(estimatedBytes()));
+    log_->appendPlainText(msg);
+    openBtn_->setEnabled(true);
+    if (size > limitSpin_->value() * MB)
+        showMessage(QMessageBox::Warning, "Warning",
+                    QString("The file is %1, over the %2 MB limit.\n"
+                            "Use \"Fit quality to limit\" or lower the quality a bit and try again.")
+                        .arg(fmtMb(size))
+                        .arg(limitSpin_->value(), 0, 'f', 1));
+}
+
+void MainWindow::cancel()
+{
+    cancelled_ = true;
+    if (proc_ && proc_->state() != QProcess::NotRunning) {
+        proc_->kill();
+        proc_->waitForFinished(3000);
+    }
+    if (!currentOutput_.isEmpty() && QFileInfo::exists(currentOutput_))
+        QFile::remove(currentOutput_);
+    progress_->setValue(0);
+    log_->appendPlainText("Cancelled.");
+    setRunning(false);
+}
+
+void MainWindow::setRunning(bool running)
+{
+    encoding_ = running;
+    startBtn_->setEnabled(!running);
+    cancelBtn_->setEnabled(running);
+    fitBtn_->setEnabled(!running && estBps_ && !fit_);
+    if (running)
+        openBtn_->setEnabled(false);
+    for (QWidget *w : std::initializer_list<QWidget *>{inEdit_, inBtn_, outEdit_, outBtn_, settingsBox_, limitSpin_})
+        w->setEnabled(!running);
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    estimator_->stop();
+    if (proc_ && proc_->state() != QProcess::NotRunning)
+        cancel();
+    event->accept();
+}

@@ -1,12 +1,13 @@
-# PyInstaller output
+# CMake build folder (also where the package zip is created)
 build/
+
+# Output of the old Python/PyInstaller version
 dist/
 
 # FFmpeg binaries to bundle (too large for git)
 ffmpeg/
 
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
+# IDE settings
+.vs/
+.vscode/
+CMakeUserPresets.json

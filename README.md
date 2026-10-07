@@ -15,10 +15,11 @@ and the changes in each one are on the
 
 1. Download `VideoCompressor-<version>-win64.zip` from the release.
 2. Extract it.
-3. Run `video_compressor.exe` inside the `video_compressor` folder.
+3. Run `video_compressor.exe` inside the extracted folder.
 
 FFmpeg is included: there is nothing else to install. Keep the folder as it
-is, because the program needs the `_internal` folder next to it.
+is, because the program needs the files next to it (Qt libraries and the
+`ffmpeg` folder).
 
 The app is not code-signed, so Windows SmartScreen may show "Windows protected
 your PC" the first time: click **More info** → **Run anyway**.
@@ -73,12 +74,21 @@ your PC" the first time: click **More info** → **Run anyway**.
   button to open the folder of the created file.
 - **FFmpeg included**: the packaged app needs nothing else installed.
 
-## Running from source
+## Building from source
 
-Requirements:
+The app is written in C++20 with [Qt 6](https://www.qt.io/) (Widgets) and
+built with CMake. Requirements:
 
-- Python 3.9 or later
-- the dependencies in `requirements.txt` (PySide6)
+- Visual Studio 2022 or later with the *Desktop development with C++* workload
+- CMake 3.21 or later and Ninja:
+
+  ```bash
+  winget install Kitware.CMake Ninja-build.Ninja
+  ```
+
+- Qt 6.5 or later for MSVC 64-bit (developed with Qt 6.11.3). The build script
+  looks for it in `C:\Qt\6.11.3\msvc2022_64`; otherwise pass `-QtDir` or set
+  `QTDIR`.
 - [FFmpeg](https://ffmpeg.org/) (`ffmpeg.exe` and `ffprobe.exe`), either in an
   `ffmpeg/` folder inside the project or in your `PATH`:
 
@@ -86,43 +96,36 @@ Requirements:
   winget install Gyan.FFmpeg
   ```
 
-```bash
-pip install -r requirements.txt
-python video_compressor.py
+Then, from PowerShell:
+
+```powershell
+.\build.ps1              # build: build\video_compressor.exe
+.\build.ps1 -Test        # build and run the tests
+.\build.ps1 -Package     # build and create build\VideoCompressor-<version>-win64.zip
 ```
 
-You can also pass a video as an argument to load it right away:
+The script sets up the Visual Studio compiler environment by itself. To run
+`build\video_compressor.exe` directly, Qt's `bin` folder must be in `PATH`. You
+can pass a video as an argument to load it right away:
 
-```bash
-python video_compressor.py "C:\path\to\video.mp4"
+```powershell
+build\video_compressor.exe "C:\path\to\video.mp4"
 ```
 
-## Building the app
+The package contains `video_compressor.exe`, only the Qt libraries and plugins
+it needs, the Microsoft C++ runtime and FFmpeg. The FFmpeg to bundle is taken
+from the `ffmpeg/` folder of the project (`ffmpeg.exe`, `ffprobe.exe` and, if
+present, `LICENSE` and `README.txt`); if that folder doesn't exist, the FFmpeg
+found in `PATH` is used. The [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)
+*full* build is recommended: it is what the app is tested with and includes
+all FFmpeg features.
 
-The app is packaged with [PyInstaller](https://pyinstaller.org/) using the
-included `.spec` file:
-
-```bash
-pip install pyinstaller
-python -m PyInstaller video_compressor.spec
-```
-
-This creates:
-
-- `dist/video_compressor/`: the app folder, with FFmpeg inside
-  (about 540 MB)
-- `dist/video_compressor.zip`: the same folder zipped, ready to share
-  (about 215 MB)
-
-The FFmpeg to bundle is taken from the `ffmpeg/` folder of the project
-(`ffmpeg.exe`, `ffprobe.exe` and, if present, `LICENSE` and `README.txt`). If
-that folder doesn't exist, the FFmpeg found in `PATH` is used. The
-[gyan.dev](https://www.gyan.dev/ffmpeg/builds/) *full* build is recommended:
-it is what the app is tested with and includes all FFmpeg features.
-
-The app is built as a folder rather than a single `.exe` on purpose: a
-single-file build would unpack FFmpeg (over 500 MB) to the temp folder at every
-launch, making startup several times slower.
+The tests (`tests/`) generate their own videos with FFmpeg and drive the real
+window offscreen: every format, codec and device combination (checking which
+encoder actually wrote the file), portrait phone videos, cover art, keyframe
+spacing and closed GOP, the position of the seek index, the accuracy of the
+estimate and *Fit quality to limit*. GPU encoders are tested only when the PC
+has them.
 
 ## How the estimate works
 
@@ -149,7 +152,11 @@ seconds.
 The source code of this app is released under the MIT License. See
 [LICENSE](LICENSE).
 
-The packaged app includes [FFmpeg](https://ffmpeg.org/) (gyan.dev build),
-which is licensed under the GPLv3. Its license and build information, including
-a link to the exact FFmpeg source code, are in `_internal/ffmpeg/` inside the
-app folder.
+The packaged app also includes:
+
+- [Qt 6](https://www.qt.io/), used under the LGPLv3. Its license texts are in
+  the `licenses` folder of the package; the Qt source code is available at
+  [download.qt.io](https://download.qt.io/official_releases/qt/).
+- [FFmpeg](https://ffmpeg.org/) (gyan.dev build), licensed under the GPLv3. Its
+  license and build information, including a link to the exact FFmpeg source
+  code, are in the `ffmpeg` folder of the package.
