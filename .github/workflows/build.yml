@@ -82,6 +82,25 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # The picture at the top of the README: it is attached to every release with the same name, and the
+      # README shows the one of the latest release
+      - name: Screenshot for the README (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\Videos | Out-Null
+          $video = "C:\Videos\Holiday trip.mp4"
+          build\ffmpeg\ffmpeg.exe -v error -y -f lavfi `
+            -i "gradients=s=1920x1080:r=30:d=60:c0=0x2563eb:c1=0xe8890c:c2=0x7c3aed:nb_colors=3:speed=0.02" `
+            -f lavfi -i "sine=f=330:d=60" -c:v libx264 -crf 16 -pix_fmt yuv420p -c:a aac -shortest $video
+          $env:QT_QPA_PLATFORM = "windows"   # the real look of the app, not the plain offscreen rendering
+          $env:QT_SCALE_FACTOR = "1.5"       # sharp on high-density screens
+          $env:VC_SCREENSHOT_VIDEO = $video
+          $env:VC_SCREENSHOT_DIR = "$PWD\build"
+          build\tst_video_compressor.exe rendersWindow
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Move-Item build\window.png build\VideoCompressor-screenshot.png -Force
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: cpack --config build/CPackConfig.cmake -B build
@@ -137,6 +156,7 @@ jobs:
           name: VideoCompressor-${{ runner.os }}
           if-no-files-found: error
           path: |
+            build/VideoCompressor-screenshot.png
             build/VideoCompressor-*-win64.exe
             build/VideoCompressor-*-win64.zip
             build/VideoCompressor-*.AppImage

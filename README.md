@@ -6,6 +6,12 @@ A small desktop app to compress videos at a chosen quality, with a
 Handy for staying under the size limits of email, chat apps or upload
 platforms: set the limit in MB and the app finds the best quality that fits.
 
+<p align="center">
+  <!-- taken automatically for every release (see .github/workflows/build.yml): this is always the latest one -->
+  <img src="https://github.com/Andrea332/VideoCompressor/releases/latest/download/VideoCompressor-screenshot.png"
+       alt="Video Compressor with a video loaded: preview frame, settings and estimated output size" width="640">
+</p>
+
 ## Download
 
 **[Download the latest version](https://github.com/Andrea332/VideoCompressor/releases/latest)**

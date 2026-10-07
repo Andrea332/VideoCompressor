@@ -10,13 +10,11 @@
 
 #include <QApplication>
 #include <QCheckBox>
-#include <QFrame>
-#include <QPushButton>
-#include <QSettings>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QFileInfo>
+#include <QFrame>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -24,7 +22,10 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QProcess>
+#include <QProgressBar>
+#include <QPushButton>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSlider>
 #include <QTemporaryDir>
 #include <QTest>
@@ -673,14 +674,28 @@ void TestVideoCompressor::survivesClosingWhileBusy()
 }
 
 // Saves a screenshot to VC_SCREENSHOT_DIR, if set (use QT_QPA_FONTDIR=C:/Windows/Fonts to get text offscreen).
+// With VC_SCREENSHOT_VIDEO it is the README picture: that video, default settings, a fresh-looking window
+// (see the workflow, which runs it on Windows with the real platform plugin).
 void TestVideoCompressor::rendersWindow()
 {
     MainWindow &w = *win_;
-    w.setInput(path("long.mp4"));
+    const QString video = qEnvironmentVariable("VC_SCREENSHOT_VIDEO");
+    w.setInput(video.isEmpty() ? path("long.mp4") : video);
     select(w.formatCombo_, "mp4");
-    select(w.vcodecCombo_, "hevc");
-    select(w.accelCombo_, "auto");
+    select(w.vcodecCombo_, video.isEmpty() ? "hevc" : "h264");
+    // the CI machine has no GPU: "Off" reads better there than "no GPU in this PC can encode H.264"
+    select(w.accelCombo_, video.isEmpty() ? "auto" : "off");
+    if (!video.isEmpty()) {
+        select(w.acodecCombo_, "aac");
+        select(w.keyintCombo_, 10);
+        w.limitSpin_->setValue(25);
+        w.autoUpdateCheck_->setChecked(true);   // as a new user sees it (this only changes the tests' settings)
+        w.log_->clear();
+        w.progress_->setValue(0);
+        w.openBtn_->setEnabled(false);
+    }
     QVERIFY(QTest::qWaitFor([this] { return settled(); }, 300000));
+    QVERIFY(QTest::qWaitFor([&] { return w.preview_->isVisible(); }, 30000));
     const QPixmap shot = w.grab();
     QVERIFY(!shot.isNull());
     if (const QString dir = qEnvironmentVariable("VC_SCREENSHOT_DIR"); !dir.isEmpty())
