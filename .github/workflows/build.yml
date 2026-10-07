@@ -133,7 +133,15 @@ jobs:
           if (-not (Test-Path "$($app.DirectoryName)/VideoCompressor.ini")) { throw "no VideoCompressor.ini in the zip" }
           & "$($app.DirectoryName)/ffmpeg/ffmpeg.exe" -hide_banner -version | Select-Object -First 1
           $p = Start-Process $app.FullName -PassThru
-          Start-Sleep -Seconds 10
+          # the first start of new files can be slow (antivirus): wait up to a minute for the window, then
+          # check that it keeps running
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited -or $p.MainWindowTitle) { break }
+          }
+          Write-Host "window after $($i + 1) s"
+          Start-Sleep -Seconds 5
           $p.Refresh()
           if ($p.HasExited) { throw "the app exited with code $($p.ExitCode)" }
           # a Qt error dialog would keep the process alive too: the main window must be there
