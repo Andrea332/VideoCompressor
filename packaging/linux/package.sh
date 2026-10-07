@@ -29,7 +29,13 @@ export LD_LIBRARY_PATH="$qt_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export APPIMAGE_EXTRACT_AND_RUN=1     # build machines often have no FUSE
 export LDAI_OUTPUT="$build/VideoCompressor-$version-linux-x86_64.AppImage"
 export OUTPUT="$LDAI_OUTPUT"
-export EXTRA_PLATFORM_PLUGINS="libqwayland-generic.so"   # native on Wayland desktops, not only through XWayland
+# native on Wayland desktops, not only through XWayland (the plugin names change between Qt versions)
+qt_platforms="$("$QMAKE" -query QT_INSTALL_PLUGINS)/platforms"
+wayland=$(cd "$qt_platforms" && ls libqwayland*.so 2> /dev/null | paste -sd ';' || true)
+if [ -n "$wayland" ]; then
+    export EXTRA_PLATFORM_PLUGINS="$wayland"
+fi
+echo "Wayland platform plugins: ${wayland:-none}"
 
 linuxdeploy-x86_64.AppImage --appdir "$appdir" \
     --executable "$appdir/usr/bin/VideoCompressor" \
