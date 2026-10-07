@@ -94,6 +94,40 @@ jobs:
         if: runner.os == 'macOS'
         run: packaging/macos/package.sh build
 
+      # The packaged app must start on its own (no missing library or plugin) and run its bundled FFmpeg
+      - name: Smoke test of the package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $app = Get-ChildItem build/_CPack_Packages/win64/ZIP -Recurse -Filter VideoCompressor.exe | Select-Object -First 1
+          & "$($app.DirectoryName)/ffmpeg/ffmpeg.exe" -hide_banner -version | Select-Object -First 1
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process $app.FullName -PassThru
+          Start-Sleep -Seconds 10
+          if ($p.HasExited) { throw "the app exited with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id
+
+      - name: Smoke test of the package (Linux)
+        if: runner.os == 'Linux'
+        working-directory: build
+        run: |
+          ./VideoCompressor-*.AppImage --appimage-extract > /dev/null
+          squashfs-root/usr/bin/ffmpeg/bin/ffmpeg -hide_banner -version | head -n 1
+          status=0
+          QT_QPA_PLATFORM=offscreen timeout 10 squashfs-root/AppRun || status=$?
+          [ "$status" -eq 124 ] || { echo "the app exited with code $status"; exit 1; }
+
+      - name: Smoke test of the package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app=build/dmg/VideoCompressor.app/Contents/MacOS
+          "$app/ffmpeg/ffmpeg" -hide_banner -version | head -n 1
+          QT_QPA_PLATFORM=offscreen "$app/VideoCompressor" &
+          pid=$!
+          sleep 10
+          kill -0 "$pid" || { echo "the app exited"; exit 1; }
+          kill "$pid"
+
       - uses: actions/upload-artifact@v4
         with:
           name: VideoCompressor-${{ runner.os }}
