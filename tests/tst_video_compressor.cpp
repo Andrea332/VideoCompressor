@@ -901,9 +901,14 @@ void TestVideoCompressor::rendersWindow()
     QVERIFY(QTest::qWaitFor([this] { return settled(); }, 300000));
     QVERIFY(QTest::qWaitFor([&] { return w.preview_->isVisible(); }, 30000));
     QTest::qWait(200);   // the layout adapts to the texts just set
-    w.resize(w.width(), w.scroll_->widget()->heightForWidth(w.width()));   // all of it, even on a small screen
+    // all of it, without the scroll bar, even if the screen is shorter (the CI machine's is): a minimum height
+    // lets the window be taller than the screen
+    const int fullHeight = w.scroll_->widget()->heightForWidth(w.width());
+    w.setMinimumHeight(fullHeight);
+    w.resize(w.width(), fullHeight);
     QTest::qWait(200);
     const QPixmap shot = w.grab();
+    w.setMinimumHeight(0);
     QVERIFY(!shot.isNull());
     if (const QString dir = qEnvironmentVariable("VC_SCREENSHOT_DIR"); !dir.isEmpty())
         QVERIFY(shot.save(dir + "/window.png"));
