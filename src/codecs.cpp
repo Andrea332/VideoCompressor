@@ -33,6 +33,18 @@ QStringList qsvIcq(int q)
     return {"-global_quality", QString::number(q)};
 }
 
+// VideoToolbox's quality goes from 1 (worst) to 100 (best): the slider keeps "lower value = better quality"
+// like every other encoder, and the UI shows VideoToolbox's own number
+int videoToolboxQuality(int q)
+{
+    return 100 - q;
+}
+
+QStringList videoToolboxQ(int q)
+{
+    return {"-q:v", QString::number(videoToolboxQuality(q))};
+}
+
 } // namespace
 
 QStringList VideoCodec::args(int q, const QString &speed, std::optional<std::pair<int, int>> gop) const
@@ -59,6 +71,8 @@ const std::vector<VideoCodec> &videoCodecs()
     static const SpeedArgs nvenc = presets("p2", "p5", "p7");
     static const SpeedArgs amf = presets("speed", "balanced", "quality", "-quality");
     static const SpeedArgs qsv = presets("veryfast", "medium", "veryslow");
+    static const SpeedArgs videoToolbox = {{"fast", {"-prio_speed", "1"}}, {"balanced", {"-prio_speed", "0"}},
+                                           {"best", {"-prio_speed", "0"}}};
 
     static const std::vector<VideoCodec> list = {
         {.label = "x264", .encoder = "libx264", .family = "h264", .quality = {18, 45, 28}, .qName = "CRF",
@@ -97,6 +111,12 @@ const std::vector<VideoCodec> &videoCodecs()
          .qArgs = qsvIcq, .speeds = qsv, .pixFmt = "nv12", .vendor = "intel"},
         {.label = "Quick Sync", .encoder = "av1_qsv", .family = "av1", .quality = {18, 51, 30}, .qName = "Q",
          .qArgs = qsvIcq, .speeds = qsv, .pixFmt = "nv12", .vendor = "intel"},
+        {.label = "VideoToolbox", .encoder = "h264_videotoolbox", .family = "h264", .quality = {20, 85, 45},
+         .qName = "Q", .qArgs = videoToolboxQ, .speeds = videoToolbox, .halving = 10, .vendor = "apple",
+         .qShown = videoToolboxQuality},
+        {.label = "VideoToolbox", .encoder = "hevc_videotoolbox", .family = "hevc", .quality = {20, 85, 45},
+         .qName = "Q", .qArgs = videoToolboxQ, .speeds = videoToolbox, .halving = 10, .vendor = "apple",
+         .qShown = videoToolboxQuality},
     };
     return list;
 }
@@ -142,6 +162,7 @@ const std::vector<Vendor> &vendors()
 {
     static const std::vector<Vendor> list = {
         {"nvidia", "NVIDIA GPU", "NVENC", "10DE"},
+        {"apple", "Apple GPU", "VideoToolbox", ""},
         {"intel", "Intel GPU", "Quick Sync", "8086"},
         {"amd", "AMD GPU", "AMF", "1002"},
     };

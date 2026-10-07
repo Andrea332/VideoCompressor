@@ -42,8 +42,10 @@ struct VideoCodec {
     QStringList extra;
     QString vendor;             // GPU encoder of this vendor (see vendors()), empty = software
     GopArgs gopArgs;            // keyframe interval, empty = "-g <frames>"
+    std::function<int(int)> qShown;   // value shown in the UI for an encoder whose own scale is reversed
 
     bool hardware() const { return !vendor.isEmpty(); }
+    int shownQuality(int value) const { return qShown ? qShown(value) : value; }
     // gop: (frames, seconds) between keyframes, empty = encoder default
     QStringList args(int quality, const QString &speed, std::optional<std::pair<int, int>> gop = {}) const;
 };

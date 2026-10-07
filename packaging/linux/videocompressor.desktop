@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Video Compressor
+Comment=Compress videos with a preview of the final size
+Exec=VideoCompressor %f
+Icon=videocompressor
+Terminal=false
+Categories=AudioVideo;Video;
+MimeType=video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/mpeg;video/x-flv;video/3gpp;

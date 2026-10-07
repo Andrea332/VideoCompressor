@@ -1,0 +1,125 @@
+# Builds, tests and packages the app on Windows, Linux and macOS (Apple Silicon).
+# For a version tag (v1.2.3) the packages are also uploaded to that release, as a draft if it doesn't exist yet.
+name: Build
+
+on:
+  push:
+    branches: [main, cross-platform]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  QT_VERSION: 6.11.3
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-2025
+          - name: Linux
+            os: ubuntu-22.04
+          - name: macOS (Apple Silicon)
+            os: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools (Windows)
+        if: runner.os == 'Windows'
+        run: choco install innosetup ninja -y --no-progress
+
+      - name: Visual Studio environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libegl1 libxkbcommon-dev libxkbcommon-x11-0 \
+            libfontconfig1 libdbus-1-3 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 file
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install Qt
+        shell: bash
+        run: |
+          pip install py7zr
+          qt_dir=$(python ci/install_qt.py "$QT_VERSION" "$RUNNER_TEMP/Qt")
+          echo "QT_DIR=$qt_dir" >> "$GITHUB_ENV"
+          echo "$qt_dir/bin" >> "$GITHUB_PATH"
+
+      - name: Download FFmpeg
+        run: python ci/get_ffmpeg.py ffmpeg
+
+      - name: Configure
+        shell: bash
+        run: |
+          extra=()
+          if [ "$RUNNER_OS" = macOS ]; then
+            extra=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0)
+          fi
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$QT_DIR" "${extra[@]}"
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: cpack --config build/CPackConfig.cmake -B build
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: QMAKE="$QT_DIR/bin/qmake" packaging/linux/package.sh build
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: packaging/macos/package.sh build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VideoCompressor-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            build/VideoCompressor-*-win64.exe
+            build/VideoCompressor-*-win64.zip
+            build/VideoCompressor-*.AppImage
+            build/VideoCompressor-*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+              --title "Video Compressor ${GITHUB_REF_NAME#v}" --notes "Release notes coming soon."
+          gh release upload "$GITHUB_REF_NAME" packages/* --clobber

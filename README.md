@@ -9,19 +9,19 @@ platforms: set the limit in MB and the app finds the best quality that fits.
 ## Download
 
 **[Download the latest version](https://github.com/Andrea332/VideoCompressor/releases/latest)**
-(Windows 10/11, 64-bit; developed and tested on Windows 11). Previous versions
-and the changes in each one are on the
+for Windows, macOS (Apple Silicon) or Linux. Previous versions and the changes
+in each one are on the
 [releases page](https://github.com/Andrea332/VideoCompressor/releases).
+FFmpeg is included in every download: there is nothing else to install.
 
-Each release has two downloads. FFmpeg is included in both: there is nothing
-else to install.
+### Windows 10/11 (64-bit)
 
 - **Installer** (`VideoCompressor-<version>-win64.exe`, the smaller download):
   run it and follow the steps. By default it installs for your user only, with
   no administrator rights; you can choose to install for all users instead.
   It adds Video Compressor to the Start menu (and, if you want, to the
   desktop), and you can uninstall it from Windows Settings like any other app.
-  Installing a newer version updates the existing one.
+  The app updates itself from then on (see *Updates* below).
 - **Portable zip** (`VideoCompressor-<version>-win64.zip`): extract it and run
   `VideoCompressor.exe` inside the extracted folder. Keep the folder as it is,
   because the program needs the files next to it (Qt libraries and the
@@ -29,6 +29,30 @@ else to install.
 
 The app is not code-signed, so Windows SmartScreen may show "Windows protected
 your PC" the first time: click **More info** → **Run anyway**.
+
+### macOS 13 or later, Apple Silicon (M1 or later)
+
+Open `VideoCompressor-<version>-macos-arm64.dmg` and drag Video Compressor into
+Applications.
+
+The app is not signed by a registered Apple developer, so the first time macOS
+blocks it. Open **System Settings → Privacy & Security**, scroll down and click
+**Open Anyway** next to the message about Video Compressor, then confirm. This
+is needed only once.
+
+### Linux (x86_64)
+
+Download `VideoCompressor-<version>-linux-x86_64.AppImage`, make it executable
+and run it:
+
+```bash
+chmod +x VideoCompressor-*-linux-x86_64.AppImage
+./VideoCompressor-*-linux-x86_64.AppImage
+```
+
+It works on distributions from 2022 on (for example Ubuntu 22.04, Debian 12,
+Fedora 36 and later). If it doesn't start because FUSE is missing, run it with
+`--appimage-extract-and-run`.
 
 ## Features
 
@@ -51,11 +75,12 @@ your PC" the first time: click **More info** → **Run anyway**.
 
   Only combinations that work together are offered. The default, MP4 with
   H.264 and AAC, plays almost everywhere.
-- **Hardware acceleration**: codecs that a GPU in your PC can encode are marked
-  with ⚡ (NVIDIA NVENC, AMD AMF and Intel Quick Sync, for H.264, H.265 and
-  AV1). Acceleration can be:
+- **Hardware acceleration**: codecs that a GPU in your computer can encode are
+  marked with ⚡: NVIDIA NVENC (Windows, Linux), AMD AMF (Windows), Intel Quick
+  Sync (Windows, Linux) for H.264, H.265 and AV1, and Apple VideoToolbox (macOS)
+  for H.264 and H.265. Acceleration can be:
   - **Automatic**: the best GPU that can encode the chosen codec (NVIDIA, then
-    Intel, then AMD), otherwise the CPU;
+    Apple, Intel and AMD), otherwise the CPU;
   - **Manual**: you choose the GPU;
   - **Off**: always the CPU.
 
@@ -82,10 +107,31 @@ your PC" the first time: click **More info** → **Run anyway**.
   button to open the folder of the created file.
 - **FFmpeg included**: the packaged app needs nothing else installed.
 
+## Updates
+
+A few seconds after starting, at most once a day, the app asks GitHub which is
+the latest release; nothing about you or your videos is sent. If there is a
+newer version, a notice appears at the top of the window:
+
+- **Update now** (Windows, installed with the installer): downloads the new
+  installer, checks it against the SHA-256 published by GitHub, installs it
+  and restarts the app.
+- **Download** (portable zip, macOS, Linux): opens the release page.
+
+Untick **Check for updates automatically** at the bottom of the window to turn
+it off; **Check now** checks right away.
+
 ## Building from source
 
 The app is written in C++20 with [Qt 6](https://www.qt.io/) (Widgets) and
-built with CMake. Requirements:
+built with CMake. Every push is built, tested and packaged on Windows, Linux
+and macOS by [GitHub Actions](.github/workflows/build.yml); for a version tag
+the packages are uploaded to the release. The workflow shows the exact steps
+for each platform: `ci/install_qt.py` installs Qt, `ci/get_ffmpeg.py`
+downloads the FFmpeg that gets bundled, and `packaging/` creates the Linux
+AppImage and the macOS disk image.
+
+On Windows you need:
 
 - Visual Studio 2022 or later with the *Desktop development with C++* workload
 - CMake 3.21 or later and Ninja:
@@ -128,26 +174,32 @@ build\VideoCompressor.exe "C:\path\to\video.mp4"
 ```
 
 The package contains `VideoCompressor.exe`, only the Qt libraries and plugins
-it needs, the Microsoft C++ runtime and FFmpeg. The FFmpeg to bundle is taken
-from the `ffmpeg/` folder of the project (`ffmpeg.exe`, `ffprobe.exe`, their
-DLLs and, if present, `LICENSE` and `README.txt`); if that folder doesn't
-exist, the FFmpeg found in `PATH` is used. The same FFmpeg is copied to
-`build\ffmpeg`, so the tests use exactly what gets shipped.
+it needs, the Microsoft C++ runtime and FFmpeg. The FFmpeg to bundle is the
+`ffmpeg/` folder of the project, copied as it is; `python ci/get_ffmpeg.py
+ffmpeg` fills it with the build used for the releases. If that folder doesn't
+exist, on Windows the FFmpeg found in `PATH` is used. The same FFmpeg is copied
+to `build\ffmpeg`, so the tests use exactly what gets shipped.
 
-The recommended FFmpeg is the [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)
-*full-shared* build (`ffmpeg-release-full-shared.7z`): copy `ffmpeg.exe`,
-`ffprobe.exe` and the `.dll` files from its `bin` folder, plus `LICENSE` and
-`README.txt`, into `ffmpeg/`. It has every feature of the *full* build, but
+The FFmpeg builds bundled with the releases:
+
+| Platform | Build | Contents of `ffmpeg/` |
+|----------|-------|-----------------------|
+| Windows | [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) *full-shared* | `ffmpeg.exe`, `ffprobe.exe` and their DLLs |
+| macOS | [Martin Riedl](https://ffmpeg.martin-riedl.de/), static, Apple Silicon | `ffmpeg`, `ffprobe` |
+| Linux | [BtbN](https://github.com/BtbN/FFmpeg-Builds) *gpl-shared*, x86_64 | `bin/ffmpeg`, `bin/ffprobe`, `lib/` |
+
+On Windows the *full-shared* build has every feature of the *full* build, but
 `ffmpeg.exe` and `ffprobe.exe` share one copy of the libraries instead of
 containing one each: 230 MB instead of 424 MB.
 
 The app icon is drawn in `resources/icon.svg` (and `icon-small.svg`, a
-simplified version for 16–24 px). After editing them, regenerate
-`resources/icon.ico` (with Qt's `bin` folder in `PATH`):
+simplified version for 16–24 px). After editing them, regenerate the icons for
+every platform (`icon.ico`, `icon.icns`, `icon.png`), with Qt's `bin` folder in
+`PATH`:
 
 ```powershell
 cmake --build build --target make_icon
-build\make_icon.exe resources\icon.svg resources\icon-small.svg resources\icon.ico
+build\make_icon.exe resources\icon.svg resources\icon-small.svg resources
 ```
 
 The tests (`tests/`) generate their own videos with FFmpeg and drive the real
@@ -187,6 +239,6 @@ The packaged app also includes:
 - [Qt 6](https://www.qt.io/), used under the LGPLv3. Its license texts are in
   the `licenses` folder of the package; the Qt source code is available at
   [download.qt.io](https://download.qt.io/official_releases/qt/).
-- [FFmpeg](https://ffmpeg.org/) (gyan.dev build), licensed under the GPLv3. Its
-  license and build information, including a link to the exact FFmpeg source
-  code, are in the `ffmpeg` folder of the package.
+- [FFmpeg](https://ffmpeg.org/), licensed under the GPLv3. Its license and
+  build information, including where to find the FFmpeg source code, are in the
+  `ffmpeg` folder of the package (in the app's `Contents/Resources` on macOS).

@@ -4,6 +4,7 @@
 #include "sizeestimator.h"
 #include "systeminfo.h"
 
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -16,6 +17,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -27,7 +29,9 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QSlider>
+#include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -129,6 +133,60 @@ MainWindow::MainWindow(QWidget *parent)
     estTimer_->setSingleShot(true);
     estTimer_->setInterval(600);
     connect(estTimer_, &QTimer::timeout, this, &MainWindow::runEstimate);
+
+    // --- Update notice (hidden until a newer version is found) ---
+    updater_ = new UpdateChecker(this);
+    updateBar_ = new QFrame;
+    updateBar_->setObjectName("updateBar");
+    updateBar_->setStyleSheet("#updateBar { background: rgba(232, 137, 12, 0.14); "
+                              "border: 1px solid rgba(232, 137, 12, 0.6); border-radius: 6px; }");
+    updateText_ = new QLabel;
+    updateText_->setWordWrap(true);
+    notesBtn_ = new QPushButton("What's new");
+    updateBtn_ = new QPushButton;
+    laterBtn_ = new QPushButton("Later");
+    auto *updateRowTop = new QHBoxLayout(updateBar_);
+    updateRowTop->addWidget(updateText_, 1);
+    updateRowTop->addWidget(notesBtn_);
+    updateRowTop->addWidget(updateBtn_);
+    updateRowTop->addWidget(laterBtn_);
+    updateBar_->hide();
+    connect(notesBtn_, &QPushButton::clicked, this, [this] {
+        if (pendingUpdate_)
+            QDesktopServices::openUrl(pendingUpdate_->page);
+    });
+    connect(updateBtn_, &QPushButton::clicked, this, &MainWindow::startUpdate);
+    connect(laterBtn_, &QPushButton::clicked, this, [this] {
+        updater_->cancelDownload();
+        downloadingUpdate_ = false;
+        updateBar_->hide();
+    });
+    connect(updater_, &UpdateChecker::updateAvailable, this, &MainWindow::onUpdateAvailable);
+    connect(updater_, &UpdateChecker::upToDate, this, [this] {
+        QSettings().setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
+        if (manualUpdateCheck_)
+            updateStatus_->setText("✔ You have the latest version");
+        manualUpdateCheck_ = false;
+        checkNowBtn_->setEnabled(true);
+    });
+    connect(updater_, &UpdateChecker::failed, this, [this](const QString &message) {
+        if (downloadingUpdate_) {
+            downloadingUpdate_ = false;
+            updateText_->setText("⚠ The update could not be downloaded: " + message.toHtmlEscaped());
+            updateBtn_->setEnabled(true);
+            return;
+        }
+        if (manualUpdateCheck_)   // automatic checks fail silently (e.g. no internet)
+            updateStatus_->setText("⚠ Could not check for updates: " + message.toHtmlEscaped());
+        manualUpdateCheck_ = false;
+        checkNowBtn_->setEnabled(true);
+    });
+    connect(updater_, &UpdateChecker::downloadProgress, this, [this](qint64 received, qint64 total) {
+        if (pendingUpdate_ && total > 0)
+            updateText_->setText(QString("Downloading Video Compressor %1… %2%")
+                                     .arg(pendingUpdate_->version).arg(received * 100 / total));
+    });
+    connect(updater_, &UpdateChecker::downloaded, this, &MainWindow::installUpdate);
 
     // --- Source ---
     inEdit_ = new QLineEdit;
@@ -291,7 +349,19 @@ MainWindow::MainWindow(QWidget *parent)
     log_->setMaximumBlockCount(500);
     log_->setMaximumHeight(110);
 
+    autoUpdateCheck_ = new QCheckBox("Check for updates automatically");
+    autoUpdateCheck_->setChecked(QSettings().value("updates/autoCheck", true).toBool());
+    connect(autoUpdateCheck_, &QCheckBox::toggled, this, [](bool on) { QSettings().setValue("updates/autoCheck", on); });
+    checkNowBtn_ = new QPushButton("Check now");
+    connect(checkNowBtn_, &QPushButton::clicked, this, [this] { checkForUpdates(true); });
+    updateStatus_ = new QLabel;
+    auto *updateRow = new QHBoxLayout;
+    updateRow->addWidget(autoUpdateCheck_);
+    updateRow->addWidget(checkNowBtn_);
+    updateRow->addWidget(updateStatus_, 1);
+
     auto *layout = new QVBoxLayout(this);
+    layout->addWidget(updateBar_);
     layout->addWidget(srcBox);
     layout->addWidget(settingsBox_);
     layout->addWidget(previewBox);
@@ -299,6 +369,13 @@ MainWindow::MainWindow(QWidget *parent)
     layout->addWidget(progress_);
     layout->addLayout(btnRow);
     layout->addWidget(log_);
+    layout->addLayout(updateRow);
+
+    // automatic check: a few seconds after startup, at most once a day
+    const QDateTime lastCheck = QSettings().value("updates/lastCheck").toDateTime();
+    if (autoUpdateCheck_->isChecked()
+        && (!lastCheck.isValid() || lastCheck.secsTo(QDateTime::currentDateTimeUtc()) > 24 * 3600))
+        QTimer::singleShot(3000, this, [this] { checkForUpdates(false); });
 
     refreshCodecs();
     if (ffmpeg_.isEmpty() || ffprobe_.isEmpty()) {
@@ -666,7 +743,7 @@ void MainWindow::updateQualityLabel()
     }
     qualityLabel_->setText(QString("%1 quality (%2 %3)")
                                .arg(capitalized(qualityName(quality(), codec_->quality)), codec_->qName)
-                               .arg(quality()));
+                               .arg(codec_->shownQuality(quality())));
 }
 
 void MainWindow::onSettingsChanged()
@@ -912,7 +989,7 @@ void MainWindow::start()
     const QString speed = codec_->speeds.isEmpty() ? QString() : " · " + speedCombo_->currentText().toLower();
     log_->appendPlainText(QString("Compressing: %1 · %2 · %3 %4 · %5 · %6 · %7%8 · keyframes every %9 s")
                               .arg(f.label, encoderSummary(), codec_->qName)
-                              .arg(quality())
+                              .arg(codec_->shownQuality(quality()))
                               .arg(resCombo_->currentText(), fpsCombo_->currentText(), audio, speed)
                               .arg(keyint()));
     setRunning(true);
@@ -1006,9 +1083,84 @@ void MainWindow::setRunning(bool running)
         w->setEnabled(!running);
 }
 
+// ------------------------------------------------ updates
+void MainWindow::checkForUpdates(bool manual)
+{
+    manualUpdateCheck_ = manual;
+    if (manual) {
+        checkNowBtn_->setEnabled(false);
+        updateStatus_->setText("Checking…");
+    }
+    updater_->check();
+}
+
+void MainWindow::onUpdateAvailable(const UpdateInfo &info)
+{
+    QSettings().setValue("updates/lastCheck", QDateTime::currentDateTimeUtc());
+    pendingUpdate_ = info;
+    updateText_->setText(QString("<b>Video Compressor %1</b> is available (you have %2).")
+                             .arg(info.version.toHtmlEscaped(), QCoreApplication::applicationVersion()));
+    updateBtn_->setText(canSelfUpdate() ? "Update now" : "Download");
+    updateBtn_->setEnabled(true);
+    updateBar_->show();
+    if (manualUpdateCheck_)
+        updateStatus_->clear();
+    manualUpdateCheck_ = false;
+    checkNowBtn_->setEnabled(true);
+}
+
+// The app updates itself only when it was installed with the Windows installer; otherwise
+// (portable zip, macOS, Linux) "Download" opens the release page.
+bool MainWindow::canSelfUpdate() const
+{
+#ifdef Q_OS_WIN
+    return pendingUpdate_ && !pendingUpdate_->installerUrl.isEmpty()
+           && QFileInfo::exists(QCoreApplication::applicationDirPath() + "/unins000.exe");
+#else
+    return false;
+#endif
+}
+
+void MainWindow::startUpdate()
+{
+    if (!pendingUpdate_)
+        return;
+    if (!canSelfUpdate()) {
+        QDesktopServices::openUrl(pendingUpdate_->page);
+        return;
+    }
+    if (encoding_) {
+        showMessage(QMessageBox::Information, "Update", "Wait for the compression to finish, then update.");
+        return;
+    }
+    downloadingUpdate_ = true;
+    updateBtn_->setEnabled(false);
+    updateText_->setText(QString("Downloading Video Compressor %1…").arg(pendingUpdate_->version));
+    updater_->download(*pendingUpdate_);
+}
+
+// Runs the new installer without its wizard (for the same user, or for all users, as before) and closes
+// the app so that its files can be replaced; the installer starts the new version when it's done.
+void MainWindow::installUpdate(const QString &installer)
+{
+    downloadingUpdate_ = false;
+    const QString appDir = QDir::cleanPath(QCoreApplication::applicationDirPath());
+    const QString userData = QDir::cleanPath(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+    const bool forCurrentUser = appDir.startsWith(userData, Qt::CaseInsensitive);
+    const QStringList args{"/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS",
+                           forCurrentUser ? "/CURRENTUSER" : "/ALLUSERS"};
+    if (!QProcess::startDetached(installer, args)) {
+        updateText_->setText("⚠ The installer could not be started.");
+        updateBtn_->setEnabled(true);
+        return;
+    }
+    close();
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     estimator_->stop();
+    updater_->cancelDownload();
     if (previewProc_)
         previewProc_->kill();
     if (proc_ && proc_->state() != QProcess::NotRunning)

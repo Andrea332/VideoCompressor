@@ -2,6 +2,7 @@
 
 #include "codecs.h"
 #include "media.h"
+#include "updatechecker.h"
 
 #include <QHash>
 #include <QIcon>
@@ -17,7 +18,9 @@
 
 class EncoderCheck;
 class SizeEstimator;
+class QCheckBox;
 class QComboBox;
+class QFrame;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
@@ -93,6 +96,13 @@ private:
     void cancel();
     void setRunning(bool running);
 
+    // updates
+    void checkForUpdates(bool manual);
+    void onUpdateAvailable(const UpdateInfo &info);
+    bool canSelfUpdate() const;
+    void startUpdate();
+    void installUpdate(const QString &installer);
+
     struct Fit {
         int lo;
         int hi;
@@ -128,6 +138,19 @@ private:
     EncoderCheck *encoders_;
     SizeEstimator *estimator_;
     QTimer *estTimer_;
+    UpdateChecker *updater_;
+    std::optional<UpdateInfo> pendingUpdate_;
+    bool manualUpdateCheck_ = false;
+    bool downloadingUpdate_ = false;
+
+    QFrame *updateBar_;
+    QLabel *updateText_;
+    QPushButton *updateBtn_;
+    QPushButton *notesBtn_;
+    QPushButton *laterBtn_;
+    QCheckBox *autoUpdateCheck_;
+    QPushButton *checkNowBtn_;
+    QLabel *updateStatus_;
 
     QLineEdit *inEdit_;
     QPushButton *inBtn_;

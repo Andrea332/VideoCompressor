@@ -15,7 +15,7 @@ struct MediaInfo {
     qint64 size = 0;
 };
 
-// Prefers the FFmpeg bundled with the app (ffmpeg/ folder next to the exe), otherwise uses PATH.
+// Prefers the FFmpeg bundled with the app (ffmpeg/ folder next to the executable), otherwise uses PATH.
 QString findTool(const QString &name);
 
 // Reads duration, dimensions, fps and audio presence with ffprobe. On failure returns nothing and sets *error.

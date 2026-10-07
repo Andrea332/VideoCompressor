@@ -6,8 +6,13 @@
 #include "mainwindow.h"
 #include "media.h"
 #include "sizeestimator.h"
+#include "updatechecker.h"
 
 #include <QApplication>
+#include <QCheckBox>
+#include <QFrame>
+#include <QPushButton>
+#include <QSettings>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFile>
@@ -48,9 +53,11 @@ private slots:
     void estimatesAccurately_data();
     void estimatesAccurately();
     void fitsToLimit();
+    void notifiesAboutUpdates();
     void rendersWindow();
 
 private:
+    bool usable(const QString &family) const;
     QString path(const QString &name) const { return dir_.filePath(name); }
     QByteArray run(const QString &program, const QStringList &args, int timeoutMs = 300000);
     void select(QComboBox *combo, const QVariant &data);
@@ -147,6 +154,14 @@ QList<int> TestVideoCompressor::nalTypes(const QString &file)
     for (auto it = re.globalMatch(trace); it.hasNext();)
         types << it.next().captured(1).toInt();
     return types;
+}
+
+// whether this PC's FFmpeg has an encoder for the codec (the FFmpeg builds differ a little between platforms)
+bool TestVideoCompressor::usable(const QString &family) const
+{
+    return std::any_of(videoCodecs().begin(), videoCodecs().end(), [&](const VideoCodec &c) {
+        return c.family == family && win_->encoders_->available().contains(c.encoder);
+    });
 }
 
 QStringList TestVideoCompressor::hardwareVendors(const QString &family) const
@@ -260,9 +275,15 @@ void TestVideoCompressor::showsVersionAndSourcePreview()
 void TestVideoCompressor::offersOnlyCompatibleCodecs()
 {
     MainWindow &w = *win_;
-    const QMap<QString, QStringList> expected = {
+    QMap<QString, QStringList> expected;   // the families each format accepts, if this FFmpeg can encode them
+    const QMap<QString, QStringList> accepted = {
         {"mp4", {"h264", "hevc", "av1", "vp9", "vvc", "mpeg4"}}, {"mkv", {"h264", "hevc", "av1", "vp9", "vvc", "mpeg4"}},
         {"webm", {"av1", "vp9"}}, {"mov", {"h264", "hevc"}}, {"avi", {"mpeg4"}}};
+    for (auto it = accepted.begin(); it != accepted.end(); ++it)
+        for (const QString &family : it.value())
+            if (usable(family))
+                expected[it.key()] << family;
+    QVERIFY(usable("h264"));   // x264 is in every FFmpeg build we ship
     for (auto it = expected.begin(); it != expected.end(); ++it) {
         select(w.formatCombo_, it.key());
         QStringList offered;
@@ -307,12 +328,14 @@ void TestVideoCompressor::statesEncoderClearly()
         QCOMPARE(w.codec_->vendor, gpus.last());
     }
 
-    select(w.formatCombo_, "webm");
-    select(w.vcodecCombo_, "vp9");
-    select(w.accelCombo_, "auto");
-    text = plainText(w.encoderLabel_->text());
-    QVERIFY2(text.contains("no (no GPU in this PC can encode VP9)") && text.contains("Encoder: libvpx"),
-             qPrintable(text));
+    if (usable("vp9")) {
+        select(w.formatCombo_, "webm");
+        select(w.vcodecCombo_, "vp9");
+        select(w.accelCombo_, "auto");
+        text = plainText(w.encoderLabel_->text());
+        QVERIFY2(text.contains("no (no GPU in this PC can encode VP9)") && text.contains("Encoder: libvpx"),
+                 qPrintable(text));
+    }
     select(w.formatCombo_, "mp4");
 }
 
@@ -329,6 +352,8 @@ void TestVideoCompressor::encodesEveryFormatCodecAndDevice()
             families << w.vcodecCombo_->itemData(i).toString();
         for (int i = 0; i < w.acodecCombo_->count(); ++i)
             audios << w.acodecCombo_->itemData(i).toString();   // the last one is "" (no audio)
+        if (families.isEmpty())
+            continue;   // e.g. AVI without an Xvid encoder in this FFmpeg
 
         // every codec on every device, then every audio codec
         QList<std::tuple<QString, QString, QString, QString>> cases;
@@ -499,6 +524,8 @@ void TestVideoCompressor::writesSeekIndexAtStart()
     QVERIFY2(boxes.indexOf("moov") >= 0 && boxes.indexOf("moov") < boxes.indexOf("mdat"), qPrintable(boxes.join(' ')));
 
     for (const auto &[format, family] : {std::pair{"mkv", "h264"}, std::pair{"webm", "vp9"}}) {
+        if (!usable(family) || !win_->encoders_->available().contains("libopus"))
+            continue;
         out = compress(path("20s.mp4"), format, family, "off", {}, "opus");
         QVERIFY(!out.isEmpty());
         const QStringList elements = mkvElements(out);
@@ -530,6 +557,8 @@ void TestVideoCompressor::estimatesAccurately()
     MainWindow &w = *win_;
     if (mode == "auto" && hardwareVendors(family).isEmpty())
         QSKIP("no GPU encoder on this PC");
+    if (!usable(family))
+        QSKIP("no encoder for this codec in this FFmpeg");
 
     w.setInput(path(input));
     select(w.formatCombo_, "mkv");
@@ -556,6 +585,8 @@ void TestVideoCompressor::estimatesAccurately()
 void TestVideoCompressor::fitsToLimit()
 {
     MainWindow &w = *win_;
+    if (!win_->encoders_->available().contains("libx265"))
+        QSKIP("no x265 in this FFmpeg");
     messages_.clear();
     w.setInput(path("long.mp4"));
     select(w.formatCombo_, "mp4");
@@ -580,6 +611,46 @@ void TestVideoCompressor::fitsToLimit()
     QVERIFY(size > 0 && size <= 2 * MB);
 }
 
+// No network: the version logic and GitHub's JSON are checked directly, the notice by emitting the signal.
+void TestVideoCompressor::notifiesAboutUpdates()
+{
+    QVERIFY(UpdateChecker::isNewer("v9.9.10", "9.9.9"));    // numeric, not alphabetical
+    QVERIFY(UpdateChecker::isNewer("v10.0.0", "9.9.9"));
+    QVERIFY(!UpdateChecker::isNewer("v9.9.9", "9.9.9"));
+    QVERIFY(!UpdateChecker::isNewer("v9.9", "9.9.0"));
+    QVERIFY(!UpdateChecker::isNewer("v9.8.0", "9.9.9"));
+    QVERIFY(!UpdateChecker::isNewer("nightly", "9.9.9"));
+
+    const QByteArray json = R"({
+        "tag_name": "v9.9.10",
+        "html_url": "https://github.com/Andrea332/VideoCompressor/releases/tag/v9.9.10",
+        "assets": [
+            {"name": "VideoCompressor-9.9.10-win64.zip", "browser_download_url": "https://example.com/a.zip"},
+            {"name": "VideoCompressor-9.9.10-win64.exe", "browser_download_url": "https://example.com/setup.exe",
+             "digest": "sha256:ABCDEF0123"},
+            {"name": "VideoCompressor-9.9.10-macos-arm64.dmg", "browser_download_url": "https://example.com/a.dmg"}
+        ]})";
+    const auto info = UpdateChecker::parseLatestRelease(json, "9.9.9");
+    QVERIFY(info);
+    QCOMPARE(info->version, QString("9.9.10"));
+    QCOMPARE(info->installerName, QString("VideoCompressor-9.9.10-win64.exe"));
+    QCOMPARE(info->installerUrl, QUrl("https://example.com/setup.exe"));
+    QCOMPARE(info->installerSha256, QString("abcdef0123"));
+    QVERIFY(!UpdateChecker::parseLatestRelease(json, "9.9.10"));
+
+    MainWindow &w = *win_;
+    QVERIFY(!w.autoUpdateCheck_->isChecked());   // turned off in main(): tests never go online
+    QVERIFY(!w.updateBar_->isVisible());
+    emit w.updater_->updateAvailable(*info);
+    QVERIFY(w.updateBar_->isVisible());
+    QVERIFY2(w.updateText_->text().contains("9.9.10") && w.updateText_->text().contains("9.9.9"),
+             qPrintable(w.updateText_->text()));
+    // not installed with the installer (no uninstaller next to the test executable): download page
+    QCOMPARE(w.updateBtn_->text(), QString("Download"));
+    QTest::mouseClick(w.laterBtn_, Qt::LeftButton);
+    QVERIFY(!w.updateBar_->isVisible());
+}
+
 // Saves a screenshot to VC_SCREENSHOT_DIR, if set (use QT_QPA_FONTDIR=C:/Windows/Fonts to get text offscreen).
 void TestVideoCompressor::rendersWindow()
 {
@@ -600,7 +671,14 @@ int main(int argc, char *argv[])
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
         qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
+    QApplication::setOrganizationName("VideoCompressorTests");
+    QApplication::setApplicationName("tst_video_compressor");
     QApplication::setApplicationVersion("9.9.9");
+    // preferences in a temporary file, not the user's, with the automatic update check off
+    QTemporaryDir settingsDir;
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDir.path());
+    QSettings().setValue("updates/autoCheck", false);
     TestVideoCompressor test;
     return QTest::qExec(&test, argc, argv);
 }

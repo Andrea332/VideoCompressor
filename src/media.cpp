@@ -19,9 +19,12 @@ QString findTool(const QString &name)
 #else
     const QString exe = name;
 #endif
-    const QString bundled = QCoreApplication::applicationDirPath() + "/ffmpeg/" + exe;
-    if (QFileInfo(bundled).isFile())
-        return bundled;
+    // ffmpeg/<exe> on Windows and macOS; ffmpeg/bin/<exe> next to ffmpeg/lib/ on Linux
+    for (const QString &dir : {"/ffmpeg/", "/ffmpeg/bin/"}) {
+        const QString bundled = QCoreApplication::applicationDirPath() + dir + exe;
+        if (QFileInfo(bundled).isFile())
+            return bundled;
+    }
     return QStandardPaths::findExecutable(name);
 }
 
