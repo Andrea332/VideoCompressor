@@ -80,7 +80,11 @@ def main():
             out = Path(tmp) / "out"
             extract(file, out)
             nested = out / version / folder   # older repository layouts keep <version>/<folder>/ inside
-            merge(nested if nested.is_dir() else out, prefix)
+            source = nested if nested.is_dir() else out
+            # the ICU libraries (Linux) come without their folder: Qt's installer puts them in lib/
+            target = prefix / "lib" if archive.startswith("icu") and not (source / "lib").is_dir() else prefix
+            target.mkdir(exist_ok=True)
+            merge(source, target)
         print(f"{archive}: {len(data) // 1024 // 1024} MB, SHA-1 ok", file=sys.stderr)
     print(prefix.as_posix())
 

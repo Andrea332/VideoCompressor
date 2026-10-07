@@ -480,7 +480,8 @@ QStringList mkvElements(const QString &path)
     if (!f.open(QIODevice::ReadOnly))
         return order;
     readVint(f, true);
-    f.seek(f.pos() + qint64(readVint(f, false)));   // EBML header
+    const qint64 headerSize = qint64(readVint(f, false));   // read before f.pos(): the size field moves it
+    f.seek(f.pos() + headerSize);                           // skip the EBML header
     readVint(f, true);
     readVint(f, false);                              // Segment
     while (!f.atEnd()) {
