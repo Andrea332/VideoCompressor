@@ -94,27 +94,31 @@ jobs:
         if: runner.os == 'macOS'
         run: packaging/macos/package.sh build
 
-      # The packaged app must start on its own (no missing library or plugin) and run its bundled FFmpeg
+      # The packaged app must start on its own, with the platform plugin it ships (no missing library or
+      # plugin), and run its bundled FFmpeg
       - name: Smoke test of the package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $app = Get-ChildItem build/_CPack_Packages/win64/ZIP -Recurse -Filter VideoCompressor.exe | Select-Object -First 1
           & "$($app.DirectoryName)/ffmpeg/ffmpeg.exe" -hide_banner -version | Select-Object -First 1
-          $env:QT_QPA_PLATFORM = "offscreen"
           $p = Start-Process $app.FullName -PassThru
           Start-Sleep -Seconds 10
+          $p.Refresh()
           if ($p.HasExited) { throw "the app exited with code $($p.ExitCode)" }
+          # a Qt error dialog would keep the process alive too: the main window must be there
+          if ($p.MainWindowTitle -notlike "Video Compressor*") { throw "unexpected window: '$($p.MainWindowTitle)'" }
           Stop-Process -Id $p.Id
 
       - name: Smoke test of the package (Linux)
         if: runner.os == 'Linux'
         working-directory: build
         run: |
+          sudo apt-get install -y xvfb
           ./VideoCompressor-*.AppImage --appimage-extract > /dev/null
           squashfs-root/usr/bin/ffmpeg/bin/ffmpeg -hide_banner -version | head -n 1
           status=0
-          QT_QPA_PLATFORM=offscreen timeout 10 squashfs-root/AppRun || status=$?
+          xvfb-run -a timeout 10 squashfs-root/AppRun || status=$?
           [ "$status" -eq 124 ] || { echo "the app exited with code $status"; exit 1; }
 
       - name: Smoke test of the package (macOS)
@@ -122,7 +126,7 @@ jobs:
         run: |
           app=build/dmg/VideoCompressor.app/Contents/MacOS
           "$app/ffmpeg/ffmpeg" -hide_banner -version | head -n 1
-          QT_QPA_PLATFORM=offscreen "$app/VideoCompressor" &
+          "$app/VideoCompressor" &
           pid=$!
           sleep 10
           kill -0 "$pid" || { echo "the app exited"; exit 1; }
@@ -138,9 +142,48 @@ jobs:
             build/VideoCompressor-*.AppImage
             build/VideoCompressor-*.dmg
 
+  # Tests built with AddressSanitizer and UndefinedBehaviorSanitizer: any invalid memory access, in the app
+  # or in Qt while it uses the app's objects, stops the tests with the exact place
+  sanitizers:
+    name: Linux (sanitizers)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libgl1-mesa-dev libegl1 libxkbcommon-dev libfontconfig1 libdbus-1-3
+
+      - name: Install Qt
+        run: |
+          pip install py7zr
+          echo "QT_DIR=$(python ci/install_qt.py "$QT_VERSION" "$RUNNER_TEMP/Qt")" >> "$GITHUB_ENV"
+
+      - name: Download FFmpeg
+        run: python ci/get_ffmpeg.py ffmpeg
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo "-DCMAKE_PREFIX_PATH=$QT_DIR" \
+            "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+          cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, sanitizers]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
