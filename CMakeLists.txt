@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21...3.31)
 
-project(VideoCompressor VERSION 2.3.0 DESCRIPTION "Compress videos with a preview of the final size" LANGUAGES CXX)
+project(VideoCompressor VERSION 2.4.0 DESCRIPTION "Compress videos with a preview of the final size" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
