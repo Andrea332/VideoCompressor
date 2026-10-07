@@ -798,13 +798,16 @@ class MainWindow(QWidget):
         name = FAMILY_NAMES.get(family, "—")
         if codec is None:
             text = f"⚠ No {'software ' if mode == 'off' else ''}encoder for <b>{name}</b> on this PC."
-        elif codec.hardware:
-            text = (f"Codec: <b>{name}</b> · Hardware acceleration: <b>yes</b> · "
-                    f"Device: <b>{self.device_name(codec.vendor)}</b> ({codec.label} encoder)")
         else:
-            why = "" if mode == "off" else f" (no GPU in this PC can encode {name})"
-            text = (f"Codec: <b>{name}</b> · Hardware acceleration: <b>no</b>{why} · "
-                    f"Device: <b>CPU</b> {self.cpu} ({codec.label} encoder)")
+            if codec.hardware:
+                accel, device = "<b>yes</b>", f"<b>{self.device_name(codec.vendor)}</b>"
+            else:
+                why = "" if mode == "off" else f" (no GPU in this PC can encode {name})"
+                accel, device = f"<b>no</b>{why}", f"<b>CPU</b> {self.cpu}"
+            rows = (("Codec:", f"<b>{name}</b>"), ("Hardware acceleration:", accel),
+                    ("Device:", device), ("Encoder:", codec.label))
+            text = "<table cellspacing='0' cellpadding='1'>" + "".join(
+                f"<tr><td>{label}&nbsp;&nbsp;</td><td>{value}</td></tr>" for label, value in rows) + "</table>"
         self.encoder_label.setText(text)
         self.set_codec(codec)
 
