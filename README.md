@@ -6,6 +6,23 @@ A small desktop app to compress videos at a chosen quality, with a
 Handy for staying under the size limits of email, chat apps or upload
 platforms: set the limit in MB and the app finds the best quality that fits.
 
+## Download
+
+**[Download the latest version](https://github.com/Andrea332/VideoCompressor/releases/latest)**
+(Windows 10/11, 64-bit; developed and tested on Windows 11). Previous versions
+and the changes in each one are on the
+[releases page](https://github.com/Andrea332/VideoCompressor/releases).
+
+1. Download `VideoCompressor-<version>-win64.zip` from the release.
+2. Extract it.
+3. Run `video_compressor.exe` inside the `video_compressor` folder.
+
+FFmpeg is included: there is nothing else to install. Keep the folder as it
+is, because the program needs the `_internal` folder next to it.
+
+The app is not code-signed, so Windows SmartScreen may show "Windows protected
+your PC" the first time: click **More info** → **Run anyway**.
+
 ## Features
 
 - **Reliable output size estimate**: instead of a theoretical calculation, the
@@ -55,15 +72,6 @@ platforms: set the limit in MB and the app finds the best quality that fits.
 - Drag and drop a video onto the window, progress bar, cancel button and a
   button to open the folder of the created file.
 - **FFmpeg included**: the packaged app needs nothing else installed.
-
-## Using the app
-
-Windows only (developed and tested on Windows 11).
-
-1. Extract `video_compressor.zip`.
-2. Run `video_compressor.exe` inside the `video_compressor` folder.
-
-Keep the folder as it is: the program needs the `_internal` folder next to it.
 
 ## Running from source
 
