@@ -13,13 +13,19 @@ platforms: set the limit in MB and the app finds the best quality that fits.
 and the changes in each one are on the
 [releases page](https://github.com/Andrea332/VideoCompressor/releases).
 
-1. Download `VideoCompressor-<version>-win64.zip` from the release.
-2. Extract it.
-3. Run `video_compressor.exe` inside the extracted folder.
+Each release has two downloads. FFmpeg is included in both: there is nothing
+else to install.
 
-FFmpeg is included: there is nothing else to install. Keep the folder as it
-is, because the program needs the files next to it (Qt libraries and the
-`ffmpeg` folder).
+- **Installer** (`VideoCompressor-<version>-win64.exe`, the smaller download):
+  run it and follow the steps. By default it installs for your user only, with
+  no administrator rights; you can choose to install for all users instead.
+  It adds Video Compressor to the Start menu (and, if you want, to the
+  desktop), and you can uninstall it from Windows Settings like any other app.
+  Installing a newer version updates the existing one.
+- **Portable zip** (`VideoCompressor-<version>-win64.zip`): extract it and run
+  `VideoCompressor.exe` inside the extracted folder. Keep the folder as it is,
+  because the program needs the files next to it (Qt libraries and the
+  `ffmpeg` folder).
 
 The app is not code-signed, so Windows SmartScreen may show "Windows protected
 your PC" the first time: click **More info** → **Run anyway**.
@@ -70,6 +76,8 @@ your PC" the first time: click **More info** → **Run anyway**.
   file (MP4, MOV, MKV, WebM), so players can jump anywhere right away, even
   over the network. Shorter intervals make the file bigger, especially for
   videos with little motion such as screen recordings.
+- **Preview of the source video**: as soon as the path points to a video, a
+  frame of it (at 10% of its length) appears next to it.
 - Drag and drop a video onto the window, progress bar, cancel button and a
   button to open the folder of the created file.
 - **FFmpeg included**: the packaged app needs nothing else installed.
@@ -96,23 +104,30 @@ built with CMake. Requirements:
   winget install Gyan.FFmpeg
   ```
 
+- To create the installer, [Inno Setup](https://jrsoftware.org/isinfo.php) 6
+  (without it, only the zip is created):
+
+  ```bash
+  winget install JRSoftware.InnoSetup
+  ```
+
 Then, from PowerShell:
 
 ```powershell
-.\build.ps1              # build: build\video_compressor.exe
+.\build.ps1              # build: build\VideoCompressor.exe
 .\build.ps1 -Test        # build and run the tests
-.\build.ps1 -Package     # build and create build\VideoCompressor-<version>-win64.zip
+.\build.ps1 -Package     # build and create the installer and the zip in build\
 ```
 
 The script sets up the Visual Studio compiler environment by itself. To run
-`build\video_compressor.exe` directly, Qt's `bin` folder must be in `PATH`. You
+`build\VideoCompressor.exe` directly, Qt's `bin` folder must be in `PATH`. You
 can pass a video as an argument to load it right away:
 
 ```powershell
-build\video_compressor.exe "C:\path\to\video.mp4"
+build\VideoCompressor.exe "C:\path\to\video.mp4"
 ```
 
-The package contains `video_compressor.exe`, only the Qt libraries and plugins
+The package contains `VideoCompressor.exe`, only the Qt libraries and plugins
 it needs, the Microsoft C++ runtime and FFmpeg. The FFmpeg to bundle is taken
 from the `ffmpeg/` folder of the project (`ffmpeg.exe`, `ffprobe.exe`, their
 DLLs and, if present, `LICENSE` and `README.txt`); if that folder doesn't

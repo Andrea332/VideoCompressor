@@ -37,6 +37,7 @@ class TestVideoCompressor : public QObject
 private slots:
     void initTestCase();
     void probesTrickyInputs();
+    void showsVersionAndSourcePreview();
     void offersOnlyCompatibleCodecs();
     void statesEncoderClearly();
     void encodesEveryFormatCodecAndDevice();
@@ -232,6 +233,28 @@ void TestVideoCompressor::probesTrickyInputs()
 
     QVERIFY(!probe(ffprobe_, path("missing.mp4"), &error));
     QCOMPARE(error, QString("file not found"));
+}
+
+void TestVideoCompressor::showsVersionAndSourcePreview()
+{
+    MainWindow &w = *win_;
+    QCOMPARE(w.windowTitle(), QString("Video Compressor 9.9.9"));   // version set in main() below
+
+    const auto previewSize = [&](const QString &name) {
+        w.setInput(path(name));
+        if (!QTest::qWaitFor([&] { return w.preview_->isVisible(); }, 30000))
+            return QSize();
+        return w.preview_->pixmap().deviceIndependentSize().toSize();
+    };
+    const QSize landscape = previewSize("input.mp4");   // 16:9: fills the 192x108 box
+    QVERIFY2(landscape.width() == 192 && std::abs(landscape.height() - 108) <= 1,
+             qPrintable(QString("%1x%2").arg(landscape.width()).arg(landscape.height())));
+    const QSize portrait = previewSize("rotated.mp4");  // phone video: stays vertical
+    QVERIFY2(portrait.height() == 108 && portrait.width() < 70,
+             qPrintable(QString("%1x%2").arg(portrait.width()).arg(portrait.height())));
+
+    w.setInput(path("missing.mp4"));
+    QVERIFY(!w.preview_->isVisible());
 }
 
 void TestVideoCompressor::offersOnlyCompatibleCodecs()
@@ -577,6 +600,7 @@ int main(int argc, char *argv[])
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
         qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
+    QApplication::setApplicationVersion("9.9.9");
     TestVideoCompressor test;
     return QTest::qExec(&test, argc, argv);
 }

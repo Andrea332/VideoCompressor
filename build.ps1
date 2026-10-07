@@ -3,9 +3,9 @@
 Builds Video Compressor with CMake, Ninja and MSVC; optionally runs the tests and creates the zip package.
 
 .EXAMPLE
-.\build.ps1              # build (build\video_compressor.exe)
+.\build.ps1              # build (build\VideoCompressor.exe)
 .\build.ps1 -Test        # build and run the tests
-.\build.ps1 -Package     # build and create build\VideoCompressor-<version>-win64.zip
+.\build.ps1 -Package     # build and create, in build\, the installer (if Inno Setup is installed) and the zip
 #>
 param(
     [string]$QtDir = $(if ($env:QTDIR) { $env:QTDIR } else { "C:\Qt\6.11.3\msvc2022_64" }),

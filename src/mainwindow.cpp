@@ -6,6 +6,7 @@
 
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDir>
 #include <QDoubleSpinBox>
@@ -37,6 +38,9 @@
 namespace {
 
 using ComboItems = QList<QPair<QString, QVariant>>;
+
+constexpr int PREVIEW_WIDTH = 192;    // preview frame of the source video, 16:9
+constexpr int PREVIEW_HEIGHT = 108;
 
 const char *const VIDEO_EXTENSIONS =
     "mp4 m4v mkv mov qt avi webm wmv asf flv f4v ts mts m2ts m2t mpg mpeg mpe m1v m2v vob evo "
@@ -100,7 +104,8 @@ QString capitalized(QString text)
 MainWindow::MainWindow(QWidget *parent)
     : QWidget(parent)
 {
-    setWindowTitle("Video Compressor");
+    const QString version = QCoreApplication::applicationVersion();
+    setWindowTitle(version.isEmpty() ? QString("Video Compressor") : "Video Compressor " + version);
     setAcceptDrops(true);
     resize(640, 800);
 
@@ -136,10 +141,19 @@ MainWindow::MainWindow(QWidget *parent)
     inRow->addWidget(inBtn_);
     srcInfo_ = new QLabel("No video loaded.");
     srcInfo_->setWordWrap(true);
+    srcInfo_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    preview_ = new QLabel;   // shown only when the path points to a video that can be read
+    preview_->setFixedSize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+    preview_->setAlignment(Qt::AlignCenter);
+    preview_->setStyleSheet("background: black;");
+    preview_->hide();
     auto *srcBox = new QGroupBox("Source video");
-    auto *srcLayout = new QVBoxLayout(srcBox);
-    srcLayout->addLayout(inRow);
-    srcLayout->addWidget(srcInfo_);
+    auto *srcColumn = new QVBoxLayout;
+    srcColumn->addLayout(inRow);
+    srcColumn->addWidget(srcInfo_, 1);
+    auto *srcLayout = new QHBoxLayout(srcBox);
+    srcLayout->addWidget(preview_, 0, Qt::AlignTop);
+    srcLayout->addLayout(srcColumn, 1);
 
     // --- Settings ---
     formatCombo_ = new QComboBox;
@@ -335,6 +349,7 @@ void MainWindow::setInput(const QString &path)
     const std::optional<MediaInfo> media = probe(ffprobe_, path, &error);
     if (!media) {
         media_.reset();
+        loadPreview();
         settingsBox_->setEnabled(false);
         startBtn_->setEnabled(false);
         fitBtn_->setEnabled(false);
@@ -375,7 +390,51 @@ void MainWindow::setInput(const QString &path)
 
     settingsBox_->setEnabled(true);
     openBtn_->setEnabled(false);
+    loadPreview();
     onSettingsChanged();
+}
+
+// Shows a frame of the source video (at 10% of its length, so it is rarely a black intro frame).
+void MainWindow::loadPreview()
+{
+    ++previewGen_;
+    if (previewProc_) {
+        previewProc_->disconnect(this);
+        previewProc_->kill();
+        previewProc_->waitForFinished(1000);
+        previewProc_->deleteLater();
+        previewProc_ = nullptr;
+    }
+    preview_->hide();
+    preview_->clear();
+    if (!media_ || ffmpeg_.isEmpty())
+        return;
+
+    // rendered at the screen's pixel density, so it stays sharp on scaled displays
+    const qreal dpr = devicePixelRatioF();
+    const int width = qRound(PREVIEW_WIDTH * dpr), height = qRound(PREVIEW_HEIGHT * dpr);
+    const double at = std::min(media_->duration * 0.1, 10.0);
+    const int gen = previewGen_;
+    auto *proc = new QProcess(this);
+    previewProc_ = proc;
+    connect(proc, &QProcess::finished, this, [this, proc, gen, dpr, at](int code, QProcess::ExitStatus status) {
+        proc->deleteLater();
+        if (proc == previewProc_)
+            previewProc_ = nullptr;
+        if (gen != previewGen_ || status != QProcess::NormalExit || code != 0)
+            return;
+        QPixmap frame;
+        if (!frame.loadFromData(proc->readAllStandardOutput(), "PNG"))
+            return;
+        frame.setDevicePixelRatio(dpr);
+        preview_->setPixmap(frame);
+        preview_->setToolTip(QString("Frame at %1").arg(fmtTime(at)));
+        preview_->show();
+    });
+    proc->start(ffmpeg_, {"-v", "error", "-ss", QString::number(at, 'f', 3), "-i", media_->path,
+                          "-map", QString("0:%1").arg(media_->videoIndex), "-frames:v", "1",
+                          "-vf", QString("scale=w=%1:h=%2:force_original_aspect_ratio=decrease").arg(width).arg(height),
+                          "-f", "image2pipe", "-c:v", "png", "-"});
 }
 
 // ------------------------------------------------ settings
@@ -950,6 +1009,8 @@ void MainWindow::setRunning(bool running)
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     estimator_->stop();
+    if (previewProc_)
+        previewProc_->kill();
     if (proc_ && proc_->state() != QProcess::NotRunning)
         cancel();
     event->accept();

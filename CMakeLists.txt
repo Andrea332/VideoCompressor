@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(VideoCompressor VERSION 2.1.0 DESCRIPTION "Compress videos with a preview of the final size" LANGUAGES CXX)
+project(VideoCompressor VERSION 2.2.0 DESCRIPTION "Compress videos with a preview of the final size" LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,6 +24,7 @@ if(MSVC)
 endif()
 
 qt_add_executable(video_compressor WIN32 src/main.cpp)
+set_target_properties(video_compressor PROPERTIES OUTPUT_NAME VideoCompressor)
 target_link_libraries(video_compressor PRIVATE vc_core)
 target_compile_definitions(video_compressor PRIVATE APP_VERSION="${PROJECT_VERSION}")
 if(WIN32)
@@ -103,7 +104,7 @@ install(CODE "
     execute_process(COMMAND \"${WINDEPLOYQT}\" --release --no-translations --no-opengl-sw
                             --no-system-d3d-compiler --no-system-dxc-compiler --no-compiler-runtime
                             --no-network --skip-plugin-types tls,networkinformation,generic
-                            \"\${CMAKE_INSTALL_PREFIX}/video_compressor.exe\"
+                            \"\${CMAKE_INSTALL_PREFIX}/$<TARGET_FILE_NAME:video_compressor>\"
                     COMMAND_ERROR_IS_FATAL ANY)
 ")
 
@@ -111,6 +112,41 @@ install(CODE "
 set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION .)
 include(InstallRequiredSystemLibraries)
 
-set(CPACK_GENERATOR ZIP)
+# Packages: a portable zip and, if Inno Setup is installed, an installer
+set(CPACK_VERBATIM_VARIABLES ON)   # values like {app}\VideoCompressor.exe are written as they are
+set(CPACK_PACKAGE_NAME "Video Compressor")
+set(CPACK_PACKAGE_VENDOR "Andrea Galet")
 set(CPACK_PACKAGE_FILE_NAME "VideoCompressor-${PROJECT_VERSION}-win64")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "Video Compressor")
+set(CPACK_PACKAGE_EXECUTABLES VideoCompressor "Video Compressor")   # Start menu shortcut
+set(CPACK_CREATE_DESKTOP_LINKS VideoCompressor)
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_SOURCE_DIR}/LICENSE")
+set(CPACK_GENERATOR ZIP)
+
+set(_pf86 "ProgramFiles(x86)")
+find_program(INNO_SETUP_COMPILER ISCC HINTS "$ENV{LOCALAPPDATA}/Programs/Inno Setup 6" "$ENV{${_pf86}}/Inno Setup 6"
+                                            "$ENV{ProgramFiles}/Inno Setup 6")
+if(INNO_SETUP_COMPILER)
+    list(APPEND CPACK_GENERATOR INNOSETUP)
+    set(CPACK_INNOSETUP_EXECUTABLE "${INNO_SETUP_COMPILER}")
+    set(CPACK_INNOSETUP_ARCHITECTURE x64)
+    set(CPACK_INNOSETUP_USE_MODERN_WIZARD ON)
+    set(CPACK_INNOSETUP_ICON_FILE "${CMAKE_SOURCE_DIR}/resources/icon.ico")
+    set(CPACK_INNOSETUP_LANGUAGES english italian)
+    set(CPACK_INNOSETUP_IGNORE_LICENSE_PAGE ON)            # MIT: no need to accept anything
+    set(CPACK_INNOSETUP_PROGRAM_MENU_FOLDER .)             # shortcut directly in the Start menu
+    set(CPACK_INNOSETUP_RUN_EXECUTABLES VideoCompressor)   # "Launch Video Compressor" at the end
+    # never change the AppId: it is how a newer version recognizes and updates the installed one
+    set(CPACK_INNOSETUP_SETUP_AppId "{{74688896-6251-4C9E-BFE5-A7BEB66AF920}")
+    set(CPACK_INNOSETUP_SETUP_AppVerName "Video Compressor ${PROJECT_VERSION}")
+    set(CPACK_INNOSETUP_SETUP_UninstallDisplayIcon "{app}\\VideoCompressor.exe")
+    set(CPACK_INNOSETUP_SETUP_MinVersion "10.0")
+    # installs for the current user without admin rights; "all users" can be chosen in the first page
+    set(CPACK_INNOSETUP_SETUP_PrivilegesRequired lowest)
+    set(CPACK_INNOSETUP_SETUP_PrivilegesRequiredOverridesAllowed dialog)
+    set(CPACK_INNOSETUP_SETUP_Compression lzma2/ultra64)
+    set(CPACK_INNOSETUP_SETUP_SolidCompression ON)
+else()
+    message(STATUS "Inno Setup not found: only the zip package will be created")
+endif()
 include(CPack)

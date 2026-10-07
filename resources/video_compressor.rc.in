@@ -18,9 +18,9 @@ BEGIN
         BEGIN
             VALUE "FileDescription", "Video Compressor"
             VALUE "FileVersion", "@PROJECT_VERSION@"
-            VALUE "InternalName", "video_compressor"
+            VALUE "InternalName", "VideoCompressor"
             VALUE "LegalCopyright", "Copyright (c) 2026 Andrea Galet. MIT License."
-            VALUE "OriginalFilename", "video_compressor.exe"
+            VALUE "OriginalFilename", "VideoCompressor.exe"
             VALUE "ProductName", "Video Compressor"
             VALUE "ProductVersion", "@PROJECT_VERSION@"
         END

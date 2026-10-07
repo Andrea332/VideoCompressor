@@ -79,6 +79,7 @@ private:
     void fitStep();
 
     // input and output
+    void loadPreview();
     void pickInput();
     void onInputEdited();
     void pickOutput();
@@ -118,6 +119,8 @@ private:
     bool encoding_ = false;
     bool cancelled_ = false;
     QProcess *proc_ = nullptr;
+    QProcess *previewProc_ = nullptr;   // extracts the preview frame of the source video
+    int previewGen_ = 0;                // discards frames of videos that are no longer loaded
     QString currentOutput_;
     QString outBuf_;
     QStringList stderrTail_;
@@ -128,6 +131,7 @@ private:
 
     QLineEdit *inEdit_;
     QPushButton *inBtn_;
+    QLabel *preview_;
     QLabel *srcInfo_;
     QComboBox *formatCombo_;
     QComboBox *vcodecCombo_;
