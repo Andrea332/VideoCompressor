@@ -23,6 +23,9 @@ for tool in linuxdeploy linuxdeploy-plugin-qt; do
 done
 
 export PATH="$tools:$PATH"            # linuxdeploy looks for its plugins in PATH
+# the installed executable no longer points to Qt: tell linuxdeploy where Qt's libraries are
+qt_libs=$("${QMAKE:?set QMAKE to the qmake of Qt}" -query QT_INSTALL_LIBS)
+export LD_LIBRARY_PATH="$qt_libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export APPIMAGE_EXTRACT_AND_RUN=1     # build machines often have no FUSE
 export LDAI_OUTPUT="$build/VideoCompressor-$version-linux-x86_64.AppImage"
 export OUTPUT="$LDAI_OUTPUT"
